@@ -51,9 +51,9 @@
 
 ## Phase 6: GitHub Repo + Daily Email Automation
 - [x] Initialize git repo in `bet/` folder, create `.gitignore` (exclude `data/raw/`, `models/*.cbm`, `__pycache__`, `.env`)
-- [ ] Create private GitHub repo and push initial codebase *(blocked pending GitHub auth on this machine)*
+- [x] Create private GitHub repo and push initial codebase
 - [x] Create `src/daily_report.py` - headless script (no Streamlit) for full cycle + SMTP email
 - [x] Create `.github/workflows/daily_bet.yml` (cron + workflow_dispatch + artifact upload)
 - [x] Create `.env.example` documenting required secrets
-- [ ] Test workflow with `workflow_dispatch`
+- [x] Test workflow with `workflow_dispatch`
 - [ ] Verify email arrives with correct formatting and recommendations

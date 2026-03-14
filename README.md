@@ -25,8 +25,8 @@ Implemented now:
 
 Still pending:
 - broader error handling and unified logging across modules
-- GitHub auth, remote repo creation, and initial push
-- live workflow dispatch and live email verification
+- optional workflow modernization for future GitHub Actions runtime changes
+- inbox-level confirmation of the live email formatting
 
 ## Project layout
 
