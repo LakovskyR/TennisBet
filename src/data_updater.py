@@ -162,6 +162,7 @@ def _download_year_csv(tour: str, year: int) -> pd.DataFrame:
 
 def http_fallback_update(tour: str) -> PullResult:
     raw_repo = RAW_REPOS[tour]
+    raw_repo.mkdir(parents=True, exist_ok=True)
     years = [datetime.now(UTC).year - i for i in range(0, 3)]
 
     last_error = "No downloadable year file found"

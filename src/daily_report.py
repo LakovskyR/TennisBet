@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import requests
 
 from config import (
     BANKROLL_LOG_FILE,
@@ -123,6 +124,34 @@ def _bootstrap_files() -> None:
             ),
             encoding="utf-8",
         )
+
+
+def _download_raw_reference_file(url: str, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    response = requests.get(url, timeout=60)
+    response.raise_for_status()
+    destination.write_bytes(response.content)
+
+
+def _ensure_player_reference_files() -> dict[str, Any]:
+    downloaded: list[str] = []
+    failures: list[str] = []
+    targets = {
+        "atp": PROCESSED_DIR.parent / "raw" / "tennis_atp" / "atp_players.csv",
+        "wta": PROCESSED_DIR.parent / "raw" / "tennis_wta" / "wta_players.csv",
+    }
+
+    for tour, path in targets.items():
+        if path.exists() and path.stat().st_size > 0:
+            continue
+        url = f"https://raw.githubusercontent.com/JeffSackmann/tennis_{tour}/master/{path.name}"
+        try:
+            _download_raw_reference_file(url, path)
+            downloaded.append(str(path))
+        except Exception as exc:
+            failures.append(f"{tour}: {exc}")
+
+    return {"downloaded": downloaded, "failures": failures}
 
 
 def _safe_read_csv(path: Path, columns: list[str] | None = None) -> pd.DataFrame:
@@ -471,6 +500,11 @@ def run_daily_report(
         report["steps"]["data_update"] = update_data_sources()
     except Exception as exc:
         report["errors"].append(f"Data update failed: {exc}")
+
+    player_ref_report = _ensure_player_reference_files()
+    report["steps"]["player_reference_files"] = player_ref_report
+    for failure in player_ref_report.get("failures", []):
+        report["errors"].append(f"Player reference download failed: {failure}")
 
     try:
         report["steps"]["pipeline"] = run_pipeline(incremental=True)
