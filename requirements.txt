@@ -1,0 +1,13 @@
+﻿python-dateutil==2.9.0.post0
+streamlit==1.53.1
+catboost==1.2.10
+xgboost==3.2.0
+optuna==4.7.0
+pandas==2.3.3
+numpy==2.4.1
+scikit-learn==1.8.0
+selenium==4.29.0
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.27.1
+plotly==6.6.0
+requests==2.32.5

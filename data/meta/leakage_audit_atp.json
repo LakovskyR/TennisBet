@@ -1,0 +1,132 @@
+{
+  "tour": "atp",
+  "generated_at": "2026-03-14T16:45:46Z",
+  "checks": {
+    "rows": 189790,
+    "days_since_non_negative": true,
+    "win_pct_bounds": true,
+    "h2h_consistent": true
+  },
+  "sample": [
+    {
+      "match_date": "1993-09-27",
+      "match_key": "1993-326|31|102021|101298|F",
+      "p1_id": "102021",
+      "p2_id": "101298",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 3,
+      "p1_matches_played_before": 379,
+      "p2_matches_played_before": 421,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "1996-08-05",
+      "match_key": "1996-422|52|101404|101965|QF",
+      "p1_id": "101404",
+      "p2_id": "101965",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 3,
+      "p1_matches_played_before": 724,
+      "p2_matches_played_before": 423,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "1975-08-27",
+      "match_key": "1975-560|25|100437|100272|R128",
+      "p1_id": "100437",
+      "p2_id": "100272",
+      "p1_days_since_last_match": 9,
+      "p2_days_since_last_match": 9,
+      "h2h_total": 0,
+      "p1_matches_played_before": 290,
+      "p2_matches_played_before": 142,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "1983-12-19",
+      "match_key": "1983-339|23|100606|100638|R16",
+      "p1_id": "100606",
+      "p2_id": "100638",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 0,
+      "p1_matches_played_before": 78,
+      "p2_matches_played_before": 23,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "1988-09-12",
+      "match_key": "1988-425|50|101404|101649|QF",
+      "p1_id": "101649",
+      "p2_id": "101404",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 6,
+      "p1_matches_played_before": 122,
+      "p2_matches_played_before": 156,
+      "p1_wins": 0
+    },
+    {
+      "match_date": "1994-02-28",
+      "match_key": "1994-404|2|101806|100763|R64",
+      "p1_id": "100763",
+      "p2_id": "101806",
+      "p1_days_since_last_match": 7,
+      "p2_days_since_last_match": 14,
+      "h2h_total": 0,
+      "p1_matches_played_before": 772,
+      "p2_matches_played_before": 85,
+      "p1_wins": 0
+    },
+    {
+      "match_date": "1971-05-24",
+      "match_key": "1971-9240|284|100161|209751|R32",
+      "p1_id": "100161",
+      "p2_id": "209751",
+      "p1_days_since_last_match": 7,
+      "p2_days_since_last_match": 14,
+      "h2h_total": 0,
+      "p1_matches_played_before": 34,
+      "p2_matches_played_before": 0,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "1976-12-26",
+      "match_key": "1976-338|27|100060|107123|R32",
+      "p1_id": "100060",
+      "p2_id": "107123",
+      "p1_days_since_last_match": 41,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 0,
+      "p1_matches_played_before": 685,
+      "p2_matches_played_before": 25,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "2001-03-12",
+      "match_key": "2001-404|40|102374|102854|R32",
+      "p1_id": "102374",
+      "p2_id": "102854",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 3,
+      "p1_matches_played_before": 524,
+      "p2_matches_played_before": 311,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "1996-05-27",
+      "match_key": "1996-520|79|102456|102374|R64",
+      "p1_id": "102374",
+      "p2_id": "102456",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 2,
+      "p1_matches_played_before": 209,
+      "p2_matches_played_before": 38,
+      "p1_wins": 0
+    }
+  ]
+}

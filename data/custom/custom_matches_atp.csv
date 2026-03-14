@@ -1,0 +1,124 @@
+tourney_id,tourney_name,surface,draw_size,tourney_level,tourney_date,match_num,winner_id,winner_name,loser_id,loser_name,score,best_of,round,source
+fs-atp-20260313-l0M0GsKD,"Indian Wells (USA), hard",Hard,,A,20260313,71082,207989,Carlos Alcaraz,111815,Cameron Norrie,6-3 6-4,3,R32,custom
+fs-atp-20260313-GSkTVyxi,"Indian Wells (USA), hard",Hard,,A,20260313,16467,106421,Daniil Medvedev,145281,J K Draper,1-6 5-7,3,R32,custom
+fs-atp-20260312-pYhKbJFk,"Indian Wells (USA), hard",Hard,,A,20260312,689681,206173,Jannik Sinner,210530,Learner Tien,1-6 2-6,3,R32,custom
+fs-atp-20260312-nTVr3kE4,"Indian Wells (USA), hard",Hard,,A,20260312,947051,100644,Alexander Zverev,209950,Arthur Fils,2-6 3-6,3,R32,custom
+fs-atp-20260312-KYeODYuh,"Indian Wells (USA), hard",Hard,,A,20260312,94299,145281,J K Draper,104925,Novak Djokovic,6-4 4-6,3,R32,custom
+fs-atp-20260311-Ai2VvikD,"Indian Wells (USA), hard",Hard,,A,20260311,269420,207989,Carlos Alcaraz,102104,Christian Ruud,6-1,3,R32,custom
+fs-atp-20260311-8tomcY4s,"Indian Wells (USA), hard",Hard,,A,20260311,21362,106421,Daniil Medvedev,210506,Alex Michelsen,6-2 6-4,3,R32,custom
+fs-atp-20260311-4p6Ux1WH,"Indian Wells (USA), hard",Hard,,A,20260311,150758,111815,Cameron Norrie,208014,Rinky Hijikata,4-6 2-6,3,R32,custom
+fs-atp-20260310-2eb9q2k3,"Indian Wells (USA), hard",Hard,,A,20260310,714167,210530,Learner Tien,200221,Alejandro Davidovich Fokina,4-6 6-1,3,R32,custom
+fs-atp-20260310-lULp2MJk,"Indian Wells (USA), hard",Hard,,A,20260310,464704,100644,Alexander Zverev,126207,Frances Tiafoe,3-6 4-6,3,R32,custom
+fs-atp-20260310-dfPh00l2,"Indian Wells (USA), hard",Hard,,A,20260310,623723,209950,Arthur Fils,200000,Felix Auger Aliassime,6-3,3,R32,custom
+fs-atp-20260310-dfwnRNlB,"Indian Wells (USA), hard",Hard,,A,20260310,697023,106421,Daniil Medvedev,202104,Sebastian Baez,6-4 6-0,3,R32,custom
+fs-atp-20260310-M5KEzVM0,"Indian Wells (USA), hard",Hard,,A,20260310,205309,207989,Carlos Alcaraz,126239,Arthur Rinderknech,6-3 6-2,3,R32,custom
+fs-atp-20260310-MByZudOa,"Indian Wells (USA), hard",Hard,,A,20260310,226937,102104,Christian Ruud,200473,Valentin Vacherot,6-3 3-6 4-6,3,R32,custom
+fs-atp-20260309-bNo7JWn2,"Indian Wells (USA), hard",Hard,,A,20260309,998156,210506,Alex Michelsen,126203,Taylor Fritz,6-4,3,R32,custom
+fs-atp-20260309-Opg9xgsR,"Indian Wells (USA), hard",Hard,,A,20260309,183968,145281,J K Draper,202103,Francisco Cerundolo,1-6 5-7,3,R32,custom
+fs-atp-20260309-2g5J8FYq,"Indian Wells (USA), hard",Hard,,A,20260309,821825,208014,Rinky Hijikata,122330,Alexander Bublik,3-6,3,R32,custom
+fs-atp-20260309-CC4JQJJl,"Indian Wells (USA), hard",Hard,,A,20260309,945101,104925,Novak Djokovic,217710,Ana Kovacevic,6-4 1-6 6-4,3,R32,custom
+fs-atp-20260309-dxG8dCqK,"Indian Wells (USA), hard",Hard,,A,20260309,684169,111815,Cameron Norrie,200282,Alex De Minaur,6-4 6-4,3,R32,custom
+fs-atp-20260309-rspuFSJq,"Indian Wells (USA), hard",Hard,,A,20260309,644112,128159,Joshua Fonseca,104652,Todd Paul,6-2 6-3,3,R32,custom
+fs-atp-20260309-pQ2ROcl1,"Indian Wells (USA), hard",Hard,,A,20260309,379770,200000,Felix Auger Aliassime,209113,Gabriel Diallo,3-6 3-6,3,R32,custom
+fs-atp-20260309-tzBG0YwJ,"Indian Wells (USA), hard",Hard,,A,20260309,988014,126207,Frances Tiafoe,207925,Flavio Cobolli,1-6 2-6,3,R32,custom
+fs-atp-20260309-dO0Ay6mg,"Indian Wells (USA), hard",Hard,,A,20260309,554564,209950,Arthur Fils,105916,Marton Fucsovics,3-6 5-7,3,R32,custom
+fs-atp-20260308-QJUhrWMb,"Indian Wells (USA), hard",Hard,,A,20260308,533991,206173,Jannik Sinner,133430,Denis Shapovalov,3-6 2-6,3,R32,custom
+fs-atp-20260308-rZZxxAIF,"Indian Wells (USA), hard",Hard,,A,20260308,222096,200221,Alejandro Davidovich Fokina,210150,Jakub Mensik,6-2 4-6 6-2,3,R32,custom
+fs-atp-20260308-UyaIZqI5,"Indian Wells (USA), hard",Hard,,A,20260308,778146,210530,Learner Tien,210097,Ben Shelton,6-4 3-6,3,R32,custom
+fs-atp-20260308-fLsbnN1B,"Indian Wells (USA), hard",Hard,,A,20260308,128046,100644,Alexander Zverev,206909,Brandon Nakashima,7-5 4-6,3,R32,custom
+fs-atp-20260308-U3NpKlGs,"Indian Wells (USA), hard",Hard,,A,20260308,151163,106421,Daniil Medvedev,126214,Alejandro Tabilo,6-4 6-2,3,R32,custom
+fs-atp-20260308-SGrTdLIG,"Indian Wells (USA), hard",Hard,,A,20260308,292656,210506,Alex Michelsen,200005,Ugo Humbert,5-7,3,R32,custom
+fs-atp-20260308-EaRKHpWF,"Indian Wells (USA), hard",Hard,,A,20260308,909698,122330,Alexander Bublik,200240,Vit Kopriva,3-6 6-2,3,R32,custom
+fs-atp-20260308-IB2dZ53e,"Indian Wells (USA), hard",Hard,,A,20260308,928145,202104,Sebastian Baez,208103,Jiri Lehecka,6-4 6-1,3,R32,custom
+fs-atp-20260308-AoalySYr,"Indian Wells (USA), hard",Hard,,A,20260308,675776,126203,Taylor Fritz,207985,Jacob Fearnley,3-6 1-6,3,R32,custom
+fs-atp-20260308-A7nyIkGU,"Indian Wells (USA), hard",Hard,,A,20260308,760353,207989,Carlos Alcaraz,105777,Grigor Dimitrov,6-2 6-3,3,R32,custom
+fs-atp-20260308-xn8Tw1DU,"Indian Wells (USA), hard",Hard,,A,20260308,32945,111815,Cameron Norrie,100554,Matthew McDonald,6-2 6-3,3,R32,custom
+fs-atp-20260308-Wl5LuNrI,"Indian Wells (USA), hard",Hard,,A,20260308,388981,208014,Rinky Hijikata,209260,Luciano Darderi,4-6 6-2 6-4,3,R32,custom
+fs-atp-20260308-ro0coREt,"Indian Wells (USA), hard",Hard,,A,20260308,6772,200282,Alex De Minaur,200624,Sebastian Korda,6-4 4-6 4-6,3,R32,custom
+fs-atp-20260307-4WnZhrs2,"Indian Wells (USA), hard",Hard,,A,20260307,899126,104925,Novak Djokovic,111794,Kamil Majchrzak,4-6 6-1 6-2,3,R32,custom
+fs-atp-20260307-vH5QWRam,"Indian Wells (USA), hard",Hard,,A,20260307,102659,200473,Valentin Vacherot,132686,Nuno Borges,7-5 7-5,3,R32,custom
+fs-atp-20260307-GUWqoq3T,"Indian Wells (USA), hard",Hard,,A,20260307,911012,209113,Gabriel Diallo,126094,Andrey Rublev,3-6,3,R32,custom
+fs-atp-20260307-MPh57oYj,"Indian Wells (USA), hard",Hard,,A,20260307,500513,128159,Joshua Fonseca,111575,Karen Khachanov,6-4 4-6,3,R32,custom
+fs-atp-20260307-EgxD03Ji,"Indian Wells (USA), hard",Hard,,A,20260307,744830,202103,Francisco Cerundolo,126127,Benjamin Bonzi,6-4 5-7,3,R32,custom
+fs-atp-20260307-lWCv4xQq,"Indian Wells (USA), hard",Hard,,A,20260307,317906,145281,J K Draper,105138,Roberto Bautista Agut,6-3 3-6 2-6,3,R32,custom
+fs-atp-20260307-AJK3XqY7,"Indian Wells (USA), hard",Hard,,A,20260307,214214,217710,Ana Kovacevic,144895,Corentin Moutet,6-1 6-4,3,R32,custom
+fs-atp-20260307-bkCvMtBl,"Indian Wells (USA), hard",Hard,,A,20260307,291072,102104,Christian Ruud,207686,Alexander Shevchenko,1-6,3,R32,custom
+fs-atp-20260307-pWP7kqxP,"Indian Wells (USA), hard",Hard,,A,20260307,794794,210150,Jakub Mensik,106218,Marcos Giron,5-7,3,R32,custom
+fs-atp-20260307-ze5H9nNt,"Indian Wells (USA), hard",Hard,,A,20260307,737989,104652,Todd Paul,200267,Zizou Bergs,1-6 2-6,3,R32,custom
+fs-atp-20260307-xGPHTykg,"Indian Wells (USA), hard",Hard,,A,20260307,75883,200221,Alejandro Davidovich Fokina,208260,Zachary Svajda,6-2,3,R32,custom
+fs-atp-20260307-IJzjKFbD,"Indian Wells (USA), hard",Hard,,A,20260307,727569,206173,Jannik Sinner,207494,Dalibor Svrcina,1-6 1-6,3,R32,custom
+fs-atp-20260307-zR7gmr3t,"Indian Wells (USA), hard",Hard,,A,20260307,271835,133430,Denis Shapovalov,246422,A M Booth,3-6 6-2,3,R32,custom
+fs-atp-20260307-fFpzEgfU,"Indian Wells (USA), hard",Hard,,A,20260307,356697,126207,Frances Tiafoe,202385,Jenson Brooksby,4-6 2-6,3,R32,custom
+fs-atp-20260307-lf3KbHkJ,"Indian Wells (USA), hard",Hard,,A,20260307,854865,200000,Felix Auger Aliassime,104792,Gael Monfils,3-6 4-6,3,R32,custom
+fs-atp-20260306-0pqmLtRG,"Indian Wells (USA), hard",Hard,,A,20260306,225446,206909,Brandon Nakashima,200116,Camilo Ugo Carabelli,6-3 6-4,3,R32,custom
+fs-atp-20260306-OYn52ajf,"Indian Wells (USA), hard",Hard,,A,20260306,878324,209950,Arthur Fils,209976,Dino Prizmic,2-6 2-3,3,R32,custom
+fs-atp-20260306-rcSyrJjK,"Indian Wells (USA), hard",Hard,,A,20260306,722936,105916,Marton Fucsovics,207518,Lorenzo Musetti,5-7 1-6,3,R32,custom
+fs-atp-20260306-QoyeBKFr,"Indian Wells (USA), hard",Hard,,A,20260306,702568,210097,Ben Shelton,124187,Reilly Opelka,6-3,3,R32,custom
+fs-atp-20260306-ARKqYdun,"Indian Wells (USA), hard",Hard,,A,20260306,959349,100644,Alexander Zverev,126610,Matteo Berrettini,3-6 4-6,3,R32,custom
+fs-atp-20260306-MDS4rAOs,"Indian Wells (USA), hard",Hard,,A,20260306,235596,207925,Flavio Cobolli,200175,Miomir Kecmanovic,3-6 6-3 6-4,3,R32,custom
+fs-atp-20260306-WScliQGr,"Indian Wells (USA), hard",Hard,,A,20260306,436666,200240,Vit Kopriva,210116,Michael Zheng,5-7,3,R32,custom
+fs-atp-20260306-d4OY1q2C,"Indian Wells (USA), hard",Hard,,A,20260306,195113,100554,Matthew McDonald,208286,Matteo Arnaldi,0-6 1-6,3,R32,custom
+fs-atp-20260306-2PaCGxQp,"Indian Wells (USA), hard",Hard,,A,20260306,434563,200624,Sebastian Korda,207681,Francisco Comesana,7-5 6-0,3,R32,custom
+fs-atp-20260306-6aPwglJs,"Indian Wells (USA), hard",Hard,,A,20260306,594990,208014,Rinky Hijikata,208353,Francesco Maestrelli,4-6,3,R32,custom
+fs-atp-20260306-jLlofqE6,"Indian Wells (USA), hard",Hard,,A,20260306,845248,132686,Nuno Borges,124013,Eduardo Nava,7-5,3,R32,custom
+fs-atp-20260306-xb2SllxR,"Indian Wells (USA), hard",Hard,,A,20260306,554609,126214,Alejandro Tabilo,212588,Rafael Jodar,6-1 6-2,3,R32,custom
+fs-atp-20260306-I9FIWlGr,"Indian Wells (USA), hard",Hard,,A,20260306,340749,146305,A J Biggs,122298,Botic Van De Zandschulp,6-3,3,R32,custom
+fs-atp-20260306-6iymBmuQ,"Indian Wells (USA), hard",Hard,,A,20260306,78661,210506,Alex Michelsen,210017,Daniel Merida Aguilar,3-6 4-6,3,R32,custom
+fs-atp-20260306-Igyvd5qf,"Indian Wells (USA), hard",Hard,,A,20260306,756086,105138,Roberto Bautista Agut,206681,Fabian Marozsan,4-6 4-6,3,R32,custom
+fs-atp-20260306-voq1mpmJ,"Indian Wells (USA), hard",Hard,,A,20260306,699399,126127,Benjamin Bonzi,208316,Valentin Royer,4-6 3-6,3,R32,custom
+fs-atp-20260305-EPSoiSmf,"Indian Wells (USA), hard",Hard,,A,20260305,158530,202104,Sebastian Baez,251436,A C Chesterfield,3-6 2-6,3,R32,custom
+fs-atp-20260305-Gnj6xKn4,"Indian Wells (USA), hard",Hard,,A,20260305,754227,207985,Jacob Fearnley,106000,Damir Dzumhur,6-3 6-3,3,R32,custom
+fs-atp-20260305-bTAYNKXA,"Indian Wells (USA), hard",Hard,,A,20260305,775097,105777,Grigor Dimitrov,209279,Terence Atmane,4-6 7-5 4-6,3,R32,custom
+fs-atp-20260305-jNDQUSpe,"Indian Wells (USA), hard",Hard,,A,20260305,777802,111794,Kamil Majchrzak,208659,Giovanni Mpetshi Perricard,6-3 1-6 7-5,3,R32,custom
+fs-atp-20260305-AmQQ35Xa,"Indian Wells (USA), hard",Hard,,A,20260305,426947,207686,Alexander Shevchenko,200647,Sho Shimabukuro,6-4 3-6 6-2,3,R32,custom
+fs-atp-20260305-CAmokcW9,"Indian Wells (USA), hard",Hard,,A,20260305,495392,133430,Denis Shapovalov,126774,Stefanos Tsitsipas,2-6 6-3 4-6,3,R32,custom
+fs-atp-20260305-xvCYS6F7,"Indian Wells (USA), hard",Hard,,A,20260305,23044,128159,Joshua Fonseca,209920,Raphael Collignon,6-4,3,R32,custom
+fs-atp-20260305-8tgbqSal,"Indian Wells (USA), hard",Hard,,A,20260305,558579,208260,Zachary Svajda,105227,Marin Cilic,6-4,3,R32,custom
+fs-atp-20260305-23j6qyno,"Indian Wells (USA), hard",Hard,,A,20260305,375443,104792,Gael Monfils,200008,Alexis Galarneau,6-3 6-4,3,R32,custom
+fs-atp-20260305-4p4KjA7E,"Indian Wells (USA), hard",Hard,,A,20260305,696338,202385,Jenson Brooksby,200615,Alexei Popyrin,6-3 6-4,3,R32,custom
+fs-atp-20260305-ATw8bAeK,"Indian Wells (USA), hard",Hard,,A,20260305,350570,209976,Dino Prizmic,209262,Tristan Schoolkate,3-6 7-5,3,R32,custom
+fs-atp-20260305-Ewd6s6U0,"Indian Wells (USA), hard",Hard,,A,20260305,385774,126610,Matteo Berrettini,105173,Adrian Mannarino,4-6 7-5 7-5,3,R32,custom
+fs-atp-20260304-xzSI5R2m,"Indian Wells (USA), hard",Hard,,A,20260304,987544,105916,Marton Fucsovics,241765,A C Cox,7-5 6-3,3,R32,custom
+fs-atp-20260304-6Xpgk6I6,"Indian Wells (USA), hard",Hard,,A,20260304,589039,207494,Dalibor Svrcina,105902,James Duckworth,6-2 6-4,3,R32,custom
+fs-atp-20260304-ptwWcREs,"Indian Wells (USA), hard",Hard,,A,20260304,763798,209113,Gabriel Diallo,208233,Mattia Bellucci,4-6,3,R32,custom
+fs-atp-20260304-8MnbvtIi,"Indian Wells (USA), hard",Hard,,A,20260304,49330,124187,Reilly Opelka,210319,Ethan Quinn,7-5,3,R32,custom
+fs-atp-20260304-l0lEzbHG,"Indian Wells (USA), hard",Hard,,A,20260304,981882,200267,Zizou Bergs,145678,A J Warmenhoyen,6-3 6-4,3,R32,custom
+fs-atp-20260304-Ecn03miK,"Indian Wells (USA), hard",Hard,,A,20260304,664094,200175,Miomir Kecmanovic,127157,Daniel Altmaier,3-6 0-1,3,R32,custom
+fs-atp-20260304-dQiMYynT,"Indian Wells (USA), hard",Hard,,A,20260304,131633,268307,A P Walton,111460,Quentin Halys,3-6 3-6,3,R32,custom
+fs-atp-20260304-nifEupaD,"Indian Wells (USA), hard",Hard,,A,20260304,233630,106218,Marcos Giron,208363,Mariano Navone,6-4 5-7 3-6,3,R32,custom
+fs-atp-20260304-4ppwiJ1c,"Indian Wells (USA), hard",Hard,,A,20260304,740181,200116,Camilo Ugo Carabelli,102093,Martin Damm,6-3,3,R32,custom
+fs-atp-20260304-Slfjl2TP,"Indian Wells (USA), hard",Hard,,A,20260304,90846,208014,Rinky Hijikata,209860,Ignacio Buse,6-3 3-6 4-6,3,R32,custom
+fs-atp-20260304-SKYI8rTa,"Indian Wells (USA), hard",Hard,,A,20260304,565441,100554,Matthew McDonald,212216,Trevor Svajda,4-6 2-6,3,R32,custom
+fs-atp-20260304-MNVAA4bm,"Indian Wells (USA), hard",Hard,,A,20260304,744449,251436,A C Chesterfield,145680,A A Bunt,6-2 3-6,3,R32,custom
+fs-atp-20260304-8bzZ40SO,"Indian Wells (USA), hard",Hard,,A,20260304,803299,207494,Dalibor Svrcina,200240,Vit Kopriva,4-6,3,R32,custom
+fs-atp-20260304-juuuGQzQ,"Indian Wells (USA), hard",Hard,,A,20260304,837411,200008,Alexis Galarneau,144642,Tomas Barrios Vera,6-3 6-4,3,R32,custom
+fs-atp-20260304-xrnMmSYq,"Indian Wells (USA), hard",Hard,,A,20260304,578631,209262,Tristan Schoolkate,111200,Elias Ymer,6-4 3-1,3,R32,custom
+fs-atp-20260303-4zwP45io,"Indian Wells (USA), hard",Hard,,A,20260303,592497,209976,Dino Prizmic,126846,Aleksandar Vukic,2-6 4-6,3,R32,custom
+fs-atp-20260303-r7LNmbb3,"Indian Wells (USA), hard",Hard,,A,20260303,256615,208353,Francesco Maestrelli,145680,A A Bunt,4-6,3,R32,custom
+fs-atp-20260303-4zcMeSEU,"Indian Wells (USA), hard",Hard,,A,20260303,261568,241765,A C Cox,105932,Nikoloz Basilashvili,6-4 6-4,3,R32,custom
+fs-atp-20260303-KCtlAiAs,"Indian Wells (USA), hard",Hard,,A,20260303,58689,126127,Benjamin Bonzi,132422,Soutatsu Mochizuki,6-4 5-7 6-3,3,R32,custom
+fs-atp-20260303-8duCa1dM,"Indian Wells (USA), hard",Hard,,A,20260303,497710,200647,Sho Shimabukuro,212021,Martin Landaluce,2-6 5-7,3,R32,custom
+fs-atp-20260303-84igARTN,"Indian Wells (USA), hard",Hard,,A,20260303,447060,210017,Daniel Merida Aguilar,208013,Dane Sweeny,6-3 4-6 6-3,3,R32,custom
+fs-atp-20260303-6RevzhPr,"Indian Wells (USA), hard",Hard,,A,20260303,479267,207494,Dalibor Svrcina,106283,Mitchell Krueger,4-6,3,R32,custom
+fs-atp-20260303-K8hY0LTb,"Indian Wells (USA), hard",Hard,,A,20260303,869161,212216,Trevor Svajda,208134,Luca Nardi,6-4 3-6,3,R32,custom
+fs-atp-20260303-0SmlhioR,"Indian Wells (USA), hard",Hard,,A,20260303,536285,144642,Tomas Barrios Vera,228868,J Leach,3-6 3-6,3,R32,custom
+fs-atp-20260303-WAvKnV8l,"Indian Wells (USA), hard",Hard,,A,20260303,358768,200008,Alexis Galarneau,209414,Luca Van Assche,4-6,3,R32,custom
+fs-atp-20260303-YeQzREnS,"Indian Wells (USA), hard",Hard,,A,20260303,454319,200240,Vit Kopriva,210536,Rei Sakamoto,6-4,3,R32,custom
+fs-atp-20260303-hMjtaabB,"Indian Wells (USA), hard",Hard,,A,20260303,686018,145680,A A Bunt,121411,Moez Echargui,4-6,3,R32,custom
+fs-atp-20260303-4b70szX8,"Indian Wells (USA), hard",Hard,,A,20260303,762419,100554,Matthew McDonald,126964,Vitaliy Sachko,2-6 1-6,3,R32,custom
+fs-atp-20260302-AeA8uE1L,"Indian Wells (USA), hard",Hard,,A,20260302,113511,251436,A C Chesterfield,105676,David Goffin,6-4 6-1,3,R32,custom
+fs-atp-20260302-4OxSp9w1,"Indian Wells (USA), hard",Hard,,A,20260302,70947,111200,Elias Ymer,109387,Clifton Wong,6-3 3-6,3,R32,custom
+fs-atp-20260302-0UCTSzIF,"Indian Wells (USA), hard",Hard,,A,20260302,148227,208014,Rinky Hijikata,209857,Leandro Riedi,5-7 3-6,3,R32,custom
+fs-atp-20260302-Cltzqm8D,"Indian Wells (USA), hard",Hard,,A,20260302,29408,209976,Dino Prizmic,210774,Alba Esteve Blanch,0-6,3,R32,custom
+fs-atp-20260302-rTEGrvEU,"Indian Wells (USA), hard",Hard,,A,20260302,601755,105932,Nikoloz Basilashvili,200711,Nicolas Mejia,6-0 2-6 4-6,3,R32,custom
+fs-atp-20260302-0nflcwTN,"Indian Wells (USA), hard",Hard,,A,20260302,437888,210017,Daniel Merida Aguilar,200516,Patrick Kypson,6-3 3-6,3,R32,custom
+fs-atp-20260302-CrkQ2san,"Indian Wells (USA), hard",Hard,,A,20260302,151543,209262,Tristan Schoolkate,106109,Alex Bolt,3-6 6-4,3,R32,custom
+fs-atp-20260302-MBBpj4Ft,"Indian Wells (USA), hard",Hard,,A,20260302,65395,208013,Dane Sweeny,269583,A Johnson,2-6 1-6,3,R32,custom
+fs-atp-20260302-4vH6LhAk,"Indian Wells (USA), hard",Hard,,A,20260302,260599,209860,Ignacio Buse,208119,Liam Draxl,6-4,3,R32,custom
+fs-atp-20260302-MH2fW9O7,"Indian Wells (USA), hard",Hard,,A,20260302,365000,212021,Martin Landaluce,210696,Alexander Blockx,0-6 2-6,3,R32,custom
+fs-atp-20260302-EianYVge,"Indian Wells (USA), hard",Hard,,A,20260302,820223,126127,Benjamin Bonzi,209957,Jack Pinnington Jones,6-3 6-4,3,R32,custom
+fs-atp-20260302-AFG8p0qI,"Indian Wells (USA), hard",Hard,,A,20260302,229004,132422,Soutatsu Mochizuki,145441,A A Stonebridge,4-6 6-4 3-6,3,R32,custom
+fs-atp-20260302-EBktfDGE,"Indian Wells (USA), hard",Hard,,A,20260302,138126,208353,Francesco Maestrelli,111797,Nicolas Jarry,4-6 6-4,3,R32,custom
+fs-atp-20260302-2kD0nME5,"Indian Wells (USA), hard",Hard,,A,20260302,108544,241765,A C Cox,228854,B Harris,6-4 6-3,3,R32,custom
+fs-atp-20260302-xhFEJWv2,"Indian Wells (USA), hard",Hard,,A,20260302,383182,200647,Sho Shimabukuro,268230,C Smith,5-7,3,R32,custom
+fs-atp-20260302-SGELUdm3,"Indian Wells (USA), hard",Hard,,A,20260302,883560,145680,A A Bunt,150324,A I Leverich,6-1 6-2,3,R32,custom

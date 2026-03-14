@@ -1,0 +1,61 @@
+{
+  "tour": "atp",
+  "trained_at": "2026-03-14T16:47:37Z",
+  "train_cutoff": "2025-07-01",
+  "split_mode": "strict_cutoff",
+  "rows_total": 189790,
+  "rows_train": 189667,
+  "rows_test": 123,
+  "optuna_trials_requested": 0,
+  "optuna_trials_used": 0,
+  "catboost_params": {
+    "iterations": 1000,
+    "learning_rate": 0.05,
+    "depth": 6,
+    "l2_leaf_reg": 3,
+    "loss_function": "Logloss",
+    "eval_metric": "Logloss",
+    "early_stopping_rounds": 50,
+    "verbose": false,
+    "random_seed": 42
+  },
+  "xgboost_params": {
+    "n_estimators": 1000,
+    "learning_rate": 0.05,
+    "max_depth": 6,
+    "reg_lambda": 3,
+    "eval_metric": "logloss",
+    "n_jobs": -1,
+    "random_state": 42,
+    "early_stopping_rounds": 50
+  },
+  "metrics": {
+    "catboost": {
+      "accuracy": 1.0,
+      "log_loss": 0.026371724049898796,
+      "brier": 0.0013085682641820451,
+      "ece": 0.025685099270673233
+    },
+    "xgboost": {
+      "accuracy": 1.0,
+      "log_loss": 0.13926945190772816,
+      "brier": 0.03297581896185875,
+      "ece": 0.11720262601123593
+    },
+    "ensemble": {
+      "accuracy": 1.0,
+      "log_loss": 0.06712591703843773,
+      "brier": 0.008502512218373157,
+      "ece": 0.06229208336287396
+    },
+    "ensemble_calibration_ece": 0.06229208336287396
+  },
+  "artifacts": {
+    "catboost_model": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\catboost_atp.cbm",
+    "xgboost_model": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\xgboost_atp.json",
+    "preprocess": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\preprocess_atp.json",
+    "feature_importance": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\feature_importance_atp.csv",
+    "calibration": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\calibration_atp.csv",
+    "predictions": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\test_predictions_atp.csv"
+  }
+}

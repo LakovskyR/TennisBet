@@ -1,0 +1,106 @@
+{
+  "initialized_at": "2026-03-14T00:00:00Z",
+  "last_new_match": "2026-03-14",
+  "staleness": {
+    "days_behind": 451,
+    "status": "critical",
+    "message": "Data is critically stale (451 days). Model accuracy is likely degrading."
+  },
+  "updated_at": "2026-03-14T17:29:02Z",
+  "sackmann_pull": "2026-03-14T17:29:02Z",
+  "tours": {
+    "atp": {
+      "success": true,
+      "method": "git",
+      "message": "Already up to date.",
+      "rows_added": 0,
+      "latest_raw_match_date": "2024-12-18",
+      "git_success": true
+    },
+    "wta": {
+      "success": true,
+      "method": "git",
+      "message": "Already up to date.",
+      "rows_added": 0,
+      "latest_raw_match_date": "2024-11-25",
+      "git_success": true
+    }
+  },
+  "pipeline_last_run": "2026-03-14T17:30:06Z",
+  "pipeline": {
+    "atp": {
+      "tour": "atp",
+      "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\atp_matches_master.csv",
+      "rows": 195110,
+      "rows_added": 0,
+      "latest_match_date": "2026-03-13"
+    },
+    "wta": {
+      "tour": "wta",
+      "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\wta_matches_master.csv",
+      "rows": 158214,
+      "rows_added": 0,
+      "latest_match_date": "2026-03-14"
+    }
+  },
+  "elo_last_run": "2026-03-14T17:30:29Z",
+  "elo": {
+    "atp": {
+      "tour": "atp",
+      "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\atp_elo_ratings.csv",
+      "rows": 379586,
+      "processed_matches": 0,
+      "snapshot": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\atp_elo_snapshot.csv"
+    },
+    "wta": {
+      "tour": "wta",
+      "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\wta_elo_ratings.csv",
+      "rows": 308204,
+      "processed_matches": 0,
+      "snapshot": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\wta_elo_snapshot.csv"
+    }
+  },
+  "feature_last_run": "2026-03-14T16:46:18Z",
+  "feature_rows": 343890,
+  "feature_outputs": {
+    "atp": {
+      "tour": "atp",
+      "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\atp_player_features.csv",
+      "rows": 189790,
+      "ioc_coverage": 0.9997945097212709,
+      "checks": {
+        "rows": 189790,
+        "days_since_non_negative": true,
+        "win_pct_bounds": true,
+        "h2h_consistent": true
+      }
+    },
+    "wta": {
+      "tour": "wta",
+      "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\wta_player_features.csv",
+      "rows": 154100,
+      "ioc_coverage": 0.9993608046722907,
+      "checks": {
+        "rows": 154100,
+        "days_since_non_negative": true,
+        "win_pct_bounds": true,
+        "h2h_consistent": true
+      }
+    },
+    "combined": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\player_features.csv"
+  },
+  "model_last_trained": "2026-03-14T16:48:32Z",
+  "model_training": {
+    "tours": [
+      "atp",
+      "wta"
+    ],
+    "train_cutoff": "2025-07-01",
+    "fallback_latest_months": 3,
+    "report_files": {
+      "atp": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\model_report_atp.json",
+      "wta": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\model_report_wta.json"
+    },
+    "metrics_file": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\model_metrics.csv"
+  }
+}

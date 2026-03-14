@@ -1,0 +1,132 @@
+{
+  "tour": "wta",
+  "generated_at": "2026-03-14T16:46:09Z",
+  "checks": {
+    "rows": 154100,
+    "days_since_non_negative": true,
+    "win_pct_bounds": true,
+    "h2h_consistent": true
+  },
+  "sample": [
+    {
+      "match_date": "2023-01-02",
+      "match_key": "2023-1049|300|221103|214119|F",
+      "p1_id": "221103",
+      "p2_id": "214119",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 0,
+      "p1_matches_played_before": 144,
+      "p2_matches_played_before": 17,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "2000-06-19",
+      "match_key": "2000-W-T2-GBR-01A-2000|23|200039|200113|QF",
+      "p1_id": "200113",
+      "p2_id": "200039",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 4,
+      "p1_matches_played_before": 191,
+      "p2_matches_played_before": 369,
+      "p1_wins": 0
+    },
+    {
+      "match_date": "1980-12-08",
+      "match_key": "1980-W-WT-AUS-02A-1980|54|200266|200361|SF",
+      "p1_id": "200266",
+      "p2_id": "200361",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 0,
+      "p1_matches_played_before": 492,
+      "p2_matches_played_before": 240,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "2021-01-06",
+      "match_key": "2021-2028|299|206368|216146|SF",
+      "p1_id": "206368",
+      "p2_id": "216146",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 0,
+      "p1_matches_played_before": 88,
+      "p2_matches_played_before": 28,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "1991-04-29",
+      "match_key": "1991-W-WT-GER-01A-1991|53|200652|200017|SF",
+      "p1_id": "200652",
+      "p2_id": "200017",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 2,
+      "p1_matches_played_before": 139,
+      "p2_matches_played_before": 249,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "2005-06-20",
+      "match_key": "2005-W-SL-GBR-01A-2005|16|201320|201432|R128",
+      "p1_id": "201320",
+      "p2_id": "201432",
+      "p1_days_since_last_match": 7,
+      "p2_days_since_last_match": 14,
+      "h2h_total": 0,
+      "p1_matches_played_before": 183,
+      "p2_matches_played_before": 0,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "2000-06-12",
+      "match_key": "2000-W-T3-GBR-01A-2000|45|200062|200772|R16",
+      "p1_id": "200062",
+      "p2_id": "200772",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 0,
+      "p1_matches_played_before": 86,
+      "p2_matches_played_before": 30,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "1980-03-24",
+      "match_key": "1980-1026|1|200962|229386|R16",
+      "p1_id": "200962",
+      "p2_id": "229386",
+      "p1_days_since_last_match": 7,
+      "p2_days_since_last_match": 14,
+      "h2h_total": 0,
+      "p1_matches_played_before": 74,
+      "p2_matches_played_before": 0,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "1970-06-22",
+      "match_key": "1970-W-SL-GBR-01A-1970|77|200160|200152|R32",
+      "p1_id": "200160",
+      "p2_id": "200152",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 2,
+      "p1_matches_played_before": 212,
+      "p2_matches_played_before": 197,
+      "p1_wins": 1
+    },
+    {
+      "match_date": "1993-05-10",
+      "match_key": "1993-W-WT-GER-02A-1993|45|200049|200671|R16",
+      "p1_id": "200049",
+      "p2_id": "200671",
+      "p1_days_since_last_match": 0,
+      "p2_days_since_last_match": 0,
+      "h2h_total": 0,
+      "p1_matches_played_before": 277,
+      "p2_matches_played_before": 35,
+      "p1_wins": 1
+    }
+  ]
+}
