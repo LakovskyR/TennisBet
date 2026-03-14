@@ -46,6 +46,19 @@ def _ensure_dirs() -> None:
     LAST_UPDATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _concat_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    usable = [frame for frame in frames if not frame.empty]
+    if not usable:
+        return pd.DataFrame()
+
+    base = usable[0]
+    aligned = [base]
+    for frame in usable[1:]:
+        trimmed = frame.loc[:, ~frame.isna().all()].copy()
+        aligned.append(trimmed.reindex(columns=base.columns))
+    return pd.concat(aligned, ignore_index=True)
+
+
 def _yearly_match_files(raw_repo: Path, tour: str) -> list[Path]:
     prefix = f"{tour}_matches_"
     files = [
@@ -171,8 +184,9 @@ def _derive_columns(df: pd.DataFrame) -> pd.DataFrame:
     # Keep records but mark training eligibility.
     df["is_training_eligible"] = ~(df["is_retirement"].fillna(False) | df["is_walkover"].fillna(False))
 
-    # Stable match key for dedup/incremental operations.
-    key_cols = ["tourney_id", "match_num", "winner_id", "loser_id", "round"]
+    # Use a scrape-stable identity so reruns with different match_num/round formatting
+    # still collapse to one match record.
+    key_cols = ["tourney_id", "tourney_date", "winner_id", "loser_id", "score"]
     for col in key_cols:
         if col not in df.columns:
             df[col] = pd.NA
@@ -193,10 +207,7 @@ def build_master_for_tour(tour: str, incremental: bool = True) -> dict[str, Any]
     expected_columns = list(raw_df.columns)
 
     custom_df = _load_custom_matches(tour, expected_columns)
-    if custom_df.empty:
-        combined = raw_df.copy()
-    else:
-        combined = pd.concat([raw_df, custom_df], ignore_index=True)
+    combined = _concat_frames([raw_df, custom_df]) if not custom_df.empty else raw_df.copy()
     combined = _derive_columns(combined)
 
     output_file = PROCESSED_DIR / f"{tour}_matches_master.csv"
@@ -206,14 +217,15 @@ def build_master_for_tour(tour: str, incremental: bool = True) -> dict[str, Any]
         if "match_key" not in existing.columns:
             existing = _derive_columns(existing)
         before = len(existing)
-        merged = pd.concat([existing, combined], ignore_index=True)
+        merged = _concat_frames([existing, combined]) if not combined.empty else existing.copy()
         merged = merged.drop_duplicates(subset=["match_key"], keep="last")
         merged["match_date"] = pd.to_datetime(merged["match_date"], errors="coerce")
         merged = merged.sort_values(["match_date", "tourney_id", "match_num"], na_position="last")
         rows_added = max(0, len(merged) - before)
         final_df = merged
     else:
-        final_df = combined.sort_values(["match_date", "tourney_id", "match_num"], na_position="last")
+        final_df = combined.drop_duplicates(subset=["match_key"], keep="last")
+        final_df = final_df.sort_values(["match_date", "tourney_id", "match_num"], na_position="last")
         rows_added = len(final_df)
 
     final_df["match_date"] = pd.to_datetime(final_df["match_date"], errors="coerce").dt.strftime(DATE_FMT)

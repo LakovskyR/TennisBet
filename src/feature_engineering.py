@@ -97,6 +97,13 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _player_sort_key(player_id: str, player_name: Any) -> tuple[Any, ...]:
+    try:
+        return (0, int(player_id))
+    except Exception:
+        return (1, _normalize_name(str(player_name)), str(player_id))
+
+
 def _rolling_win_pct(results: deque[int], window: int) -> float:
     if not results:
         return DEFAULT_WIN_PCT
@@ -381,10 +388,9 @@ def _build_features_for_tour(
         w_rank = _to_float(winner_rank)
         l_rank = _to_float(loser_rank)
 
-        if w_rank is not None and l_rank is not None:
-            p1_is_winner = w_rank <= l_rank
-        else:
-            p1_is_winner = True
+        # Keep p1/p2 ordering independent from the match outcome to avoid leaking the label
+        # whenever rank data is absent in recent/custom rows.
+        p1_is_winner = _player_sort_key(winner_id, winner_name) <= _player_sort_key(loser_id, loser_name)
 
         if p1_is_winner:
             p1_id, p2_id = winner_id, loser_id

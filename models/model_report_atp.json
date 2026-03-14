@@ -1,54 +1,88 @@
 {
   "tour": "atp",
-  "trained_at": "2026-03-14T16:47:37Z",
-  "train_cutoff": "2025-07-01",
+  "trained_at": "2026-03-14T23:42:55Z",
+  "train_cutoff": "2025-01-01",
   "split_mode": "strict_cutoff",
-  "rows_total": 189790,
-  "rows_train": 189667,
-  "rows_test": 123,
+  "rows_total": 192721,
+  "rows_train": 189740,
+  "rows_test": 2981,
+  "split_summary": {
+    "train": {
+      "rows": 189740,
+      "target_mean": 0.5194792874459787,
+      "target_counts": {
+        "0": 91174,
+        "1": 98566
+      },
+      "date_min": "1967-12-28",
+      "date_max": "2024-12-29"
+    },
+    "validation": {
+      "rows": 37948,
+      "target_mean": 0.5119637398545378,
+      "target_counts": {
+        "0": 18520,
+        "1": 19428
+      },
+      "date_min": "2011-01-31",
+      "date_max": "2024-12-29"
+    },
+    "test": {
+      "rows": 2981,
+      "target_mean": 0.4857430392485743,
+      "target_counts": {
+        "0": 1533,
+        "1": 1448
+      },
+      "date_min": "2025-01-06",
+      "date_max": "2026-03-13"
+    }
+  },
   "optuna_trials_requested": 0,
   "optuna_trials_used": 0,
   "catboost_params": {
-    "iterations": 1000,
+    "iterations": 649,
     "learning_rate": 0.05,
     "depth": 6,
     "l2_leaf_reg": 3,
     "loss_function": "Logloss",
     "eval_metric": "Logloss",
-    "early_stopping_rounds": 50,
     "verbose": false,
     "random_seed": 42
   },
   "xgboost_params": {
-    "n_estimators": 1000,
+    "n_estimators": 232,
     "learning_rate": 0.05,
     "max_depth": 6,
     "reg_lambda": 3,
     "eval_metric": "logloss",
     "n_jobs": -1,
-    "random_state": 42,
-    "early_stopping_rounds": 50
+    "random_state": 42
+  },
+  "selection": {
+    "catboost_best_iterations": 649,
+    "xgboost_best_iterations": 232
   },
   "metrics": {
     "catboost": {
-      "accuracy": 1.0,
-      "log_loss": 0.026371724049898796,
-      "brier": 0.0013085682641820451,
-      "ece": 0.025685099270673233
+      "accuracy": 0.6470982891647098,
+      "log_loss": 0.6205831374436133,
+      "brier": 0.21653660952185408,
+      "ece": 0.02409082453638294
     },
     "xgboost": {
-      "accuracy": 1.0,
-      "log_loss": 0.13926945190772816,
-      "brier": 0.03297581896185875,
-      "ece": 0.11720262601123593
+      "accuracy": 0.6434082522643408,
+      "log_loss": 0.6203687377173535,
+      "brier": 0.2163635939359665,
+      "ece": 0.02518942222094144
     },
     "ensemble": {
-      "accuracy": 1.0,
-      "log_loss": 0.06712591703843773,
-      "brier": 0.008502512218373157,
-      "ece": 0.06229208336287396
+      "accuracy": 0.6470982891647098,
+      "log_loss": 0.6198845267905211,
+      "brier": 0.21622416943373626,
+      "ece": 0.021064504511177095
     },
-    "ensemble_calibration_ece": 0.06229208336287396
+    "ensemble_calibration_ece": 0.021064504511177095
   },
   "artifacts": {
     "catboost_model": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\catboost_atp.cbm",

@@ -93,12 +93,48 @@ def _split_temporal(
 
 
 def _split_train_validation(train_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if len(train_df) <= 1:
+        return train_df.copy(), train_df.copy()
+
     if len(train_df) < 50:
-        return train_df.copy(), train_df.tail(min(10, len(train_df))).copy()
+        val_rows = min(10, max(1, len(train_df) // 5))
+        return train_df.iloc[:-val_rows].copy(), train_df.iloc[-val_rows:].copy()
 
     idx = int(len(train_df) * 0.8)
     idx = max(1, min(idx, len(train_df) - 1))
     return train_df.iloc[:idx].copy(), train_df.iloc[idx:].copy()
+
+
+def _choose_iteration_count(model: Any, fallback: int, attr_name: str) -> int:
+    best_iter = getattr(model, attr_name, None)
+    if best_iter is None:
+        best_iter = getattr(model, "best_iteration_", None)
+    if best_iter is None:
+        return int(fallback)
+    return max(1, int(best_iter) + 1)
+
+
+def _target_summary(df: pd.DataFrame) -> dict[str, Any]:
+    if df.empty:
+        return {
+            "rows": 0,
+            "target_mean": None,
+            "target_counts": {"0": 0, "1": 0},
+            "date_min": None,
+            "date_max": None,
+        }
+
+    counts = df[TARGET_COL].astype(int).value_counts().to_dict()
+    return {
+        "rows": int(len(df)),
+        "target_mean": float(df[TARGET_COL].astype(float).mean()),
+        "target_counts": {
+            "0": int(counts.get(0, 0)),
+            "1": int(counts.get(1, 0)),
+        },
+        "date_min": df["match_date"].min().strftime("%Y-%m-%d"),
+        "date_max": df["match_date"].max().strftime("%Y-%m-%d"),
+    }
 
 
 def _prepare_frames(
@@ -346,12 +382,35 @@ def train_for_tour(
         }
     )
 
-    cat_model = CatBoostClassifier(**cat_params)
-    cat_model.fit(x_train, y_train, cat_features=cat_cols, eval_set=(x_test, y_test), use_best_model=True)
+    cat_selection_model = CatBoostClassifier(**cat_params)
+    cat_selection_model.fit(
+        x_train_core,
+        y_train_core,
+        cat_features=cat_cols,
+        eval_set=(x_val_core, y_val_core),
+        use_best_model=True,
+    )
+    cat_final_iterations = _choose_iteration_count(cat_selection_model, cat_params["iterations"], "best_iteration_")
+    cat_final_params = {k: v for k, v in cat_params.items() if k != "early_stopping_rounds"}
+    cat_final_params["iterations"] = cat_final_iterations
+
+    cat_model = CatBoostClassifier(**cat_final_params)
+    cat_model.fit(x_train, y_train, cat_features=cat_cols, verbose=False)
+
+    x_train_core_xgb, x_val_core_xgb = _to_xgb_matrix(x_train_core, x_val_core, cat_cols)
+    xgb_selection_model = XGBClassifier(**xgb_params)
+    xgb_selection_model.fit(x_train_core_xgb, y_train_core, eval_set=[(x_val_core_xgb, y_val_core)], verbose=False)
+    xgb_final_estimators = _choose_iteration_count(
+        xgb_selection_model,
+        xgb_params["n_estimators"],
+        "best_iteration",
+    )
 
     x_train_xgb, x_test_xgb = _to_xgb_matrix(x_train, x_test, cat_cols)
-    xgb_model = XGBClassifier(**xgb_params)
-    xgb_model.fit(x_train_xgb, y_train, eval_set=[(x_test_xgb, y_test)], verbose=False)
+    xgb_final_params = {k: v for k, v in xgb_params.items() if k != "early_stopping_rounds"}
+    xgb_final_params["n_estimators"] = xgb_final_estimators
+    xgb_model = XGBClassifier(**xgb_final_params)
+    xgb_model.fit(x_train_xgb, y_train, verbose=False)
 
     preprocess_payload = {
         "feature_cols": feature_cols,
@@ -431,10 +490,19 @@ def train_for_tour(
         "rows_total": int(len(df)),
         "rows_train": int(len(train_df)),
         "rows_test": int(len(test_df)),
+        "split_summary": {
+            "train": _target_summary(train_df),
+            "validation": _target_summary(val_core),
+            "test": _target_summary(test_df),
+        },
         "optuna_trials_requested": int(optuna_trials) if use_optuna else 0,
         "optuna_trials_used": int(optuna_trials) if use_optuna and optuna is not None else 0,
-        "catboost_params": cat_params,
-        "xgboost_params": xgb_params,
+        "catboost_params": cat_final_params,
+        "xgboost_params": xgb_final_params,
+        "selection": {
+            "catboost_best_iterations": int(cat_final_iterations),
+            "xgboost_best_iterations": int(xgb_final_estimators),
+        },
         "metrics": {
             "catboost": metrics_cat,
             "xgboost": metrics_xgb,
