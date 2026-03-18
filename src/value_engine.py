@@ -31,6 +31,8 @@ def _load_predictions(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     df = pd.read_csv(path, low_memory=False)
+    if "ensemble_prob_p1" not in df.columns and "ensemble_prob" in df.columns:
+        df["ensemble_prob_p1"] = df["ensemble_prob"]
     required = ["match_date", "p1_name", "p2_name", "ensemble_prob_p1", "catboost_prob", "xgboost_prob", "confidence_tier", "model_agreement"]
     for col in required:
         if col not in df.columns:
@@ -50,12 +52,15 @@ def _load_odds(path: Path) -> pd.DataFrame:
 
     needed = [
         "match_date",
+        "tour",
         "tournament",
         "surface",
         "player_1",
         "player_2",
         "player_1_resolved",
         "player_2_resolved",
+        "player_1_id",
+        "player_2_id",
         "odds_p1",
         "odds_p2",
     ]
@@ -77,9 +82,27 @@ def _join_predictions_with_odds(pred: pd.DataFrame, odds: pd.DataFrame) -> pd.Da
     pred["match_date"] = pd.to_datetime(pred["match_date"], errors="coerce").dt.date.astype("string")
     odds["match_date"] = pd.to_datetime(odds["match_date"], errors="coerce").dt.date.astype("string")
 
+    def _norm_player_id(value: Any) -> str:
+        if pd.isna(value):
+            return ""
+        text = str(value).strip()
+        if not text or text.lower() == "nan":
+            return ""
+        try:
+            return str(int(float(text)))
+        except Exception:
+            return text
+
+    odds_map_ids: dict[tuple[str, str, str], dict[str, Any]] = {}
     odds_map: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in odds.to_dict(orient="records"):
         date_key = str(row.get("match_date"))
+        id1 = _norm_player_id(row.get("player_1_id"))
+        id2 = _norm_player_id(row.get("player_2_id"))
+        if id1 and id2:
+            id_key = (date_key, min(id1, id2), max(id1, id2))
+            if id_key not in odds_map_ids:
+                odds_map_ids[id_key] = row
         n1 = canonicalize_player_name(row.get("player_1_resolved") or row.get("player_1"), aliases)
         n2 = canonicalize_player_name(row.get("player_2_resolved") or row.get("player_2"), aliases)
         key = (date_key, min(n1, n2), max(n1, n2))
@@ -90,11 +113,20 @@ def _join_predictions_with_odds(pred: pd.DataFrame, odds: pd.DataFrame) -> pd.Da
     unmatched_rows: list[str] = []
     for row in pred.to_dict(orient="records"):
         date_key = str(row.get("match_date"))
+        p1_id = _norm_player_id(row.get("p1_id"))
+        p2_id = _norm_player_id(row.get("p2_id"))
         p1 = canonicalize_player_name(row.get("p1_name"), aliases)
         p2 = canonicalize_player_name(row.get("p2_name"), aliases)
         key = (date_key, min(p1, p2), max(p1, p2))
 
-        odds_row = odds_map.get(key)
+        odds_row = None
+        matched_by_id = False
+        if p1_id and p2_id:
+            id_key = (date_key, min(p1_id, p2_id), max(p1_id, p2_id))
+            odds_row = odds_map_ids.get(id_key)
+            matched_by_id = odds_row is not None
+        if odds_row is None:
+            odds_row = odds_map.get(key)
         if odds_row is None:
             unmatched_rows.append(f"{row.get('match_date')}:{row.get('p1_name')} vs {row.get('p2_name')}")
             continue
@@ -102,7 +134,12 @@ def _join_predictions_with_odds(pred: pd.DataFrame, odds: pd.DataFrame) -> pd.Da
         odds_p1_raw = pd.to_numeric(odds_row.get("odds_p1"), errors="coerce")
         odds_p2_raw = pd.to_numeric(odds_row.get("odds_p2"), errors="coerce")
 
-        if p1 == canonicalize_player_name(odds_row.get("player_1_resolved") or odds_row.get("player_1"), aliases):
+        if matched_by_id:
+            same_order = p1_id == _norm_player_id(odds_row.get("player_1_id"))
+        else:
+            same_order = p1 == canonicalize_player_name(odds_row.get("player_1_resolved") or odds_row.get("player_1"), aliases)
+
+        if same_order:
             odds_p1 = odds_p1_raw
             odds_p2 = odds_p2_raw
         else:

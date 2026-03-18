@@ -108,7 +108,7 @@
 - Files: `src/value_engine.py`
 
 ### 9.4 Live backtest on rolling window
-- [ ] Allow backtesting on arbitrary date ranges with regenerated predictions
+- [x] Allow backtesting on arbitrary date ranges with regenerated predictions
 - Current backtest loads static `test_predictions_{tour}.csv` from training time
 - Need: select date range -> rebuild features as-of each date -> predict -> compare to actuals
 - Files: `src/backtest.py`

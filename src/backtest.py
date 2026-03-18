@@ -1,5 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import argparse
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -8,7 +9,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config import MAX_DAILY_BETS, MIN_EDGE_THRESHOLD, MODELS_DIR, ODDS_HISTORY_FILE
+from config import MAX_DAILY_BETS, MIN_EDGE_THRESHOLD, MODELS_DIR, ODDS_HISTORY_FILE, PROCESSED_DIR
+from src.predictor import add_prediction_columns
 from src.value_engine import _compute_edges, _join_predictions_with_odds, _load_odds, allocate_bankroll
 
 
@@ -27,6 +29,95 @@ def _max_drawdown(equity: list[float]) -> float:
         if dd > max_dd:
             max_dd = dd
     return float(max_dd)
+
+
+def _parse_date(value: str | None) -> pd.Timestamp | None:
+    if value is None:
+        return None
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        raise ValueError(f"Invalid date: {value}")
+    return parsed.normalize()
+
+
+def _date_window_label(start_date: str | None, end_date: str | None) -> str:
+    start = start_date or "min"
+    end = end_date or "max"
+    return f"{start}_to_{end}".replace(":", "-")
+
+
+def _load_feature_rows_for_tour(
+    tour: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> pd.DataFrame:
+    feature_path = PROCESSED_DIR / f"{tour}_player_features.csv"
+    if not feature_path.exists():
+        return pd.DataFrame()
+
+    df = pd.read_csv(feature_path, low_memory=False)
+    if df.empty:
+        return df
+
+    df["match_date"] = pd.to_datetime(df["match_date"], errors="coerce")
+    df = df[df["match_date"].notna()].copy()
+
+    start_ts = _parse_date(start_date)
+    end_ts = _parse_date(end_date)
+    if start_ts is not None:
+        df = df[df["match_date"] >= start_ts]
+    if end_ts is not None:
+        df = df[df["match_date"] <= end_ts]
+
+    if "tour" in df.columns:
+        df = df[df["tour"].astype("string").str.lower() == tour]
+
+    return df.sort_values(["match_date", "match_key"]).reset_index(drop=True)
+
+
+def _build_predictions_for_tour(
+    tour: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> tuple[pd.DataFrame, Path, str | None]:
+    feature_rows = _load_feature_rows_for_tour(tour=tour, start_date=start_date, end_date=end_date)
+    output_path = MODELS_DIR / f"backtest_predictions_{tour}_{_date_window_label(start_date, end_date)}.csv"
+    if feature_rows.empty:
+        return pd.DataFrame(), output_path, "No historical feature rows found for the requested date window."
+
+    pred = add_prediction_columns(feature_rows, tour=tour)
+    pred["match_date"] = pd.to_datetime(pred["match_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+    keep_cols = [
+        "match_key",
+        "match_date",
+        "tour",
+        "p1_id",
+        "p2_id",
+        "p1_name",
+        "p2_name",
+        "p1_wins",
+        "surface",
+        "round",
+        "catboost_prob",
+        "xgboost_prob",
+        "ensemble_prob_p1",
+        "confidence_tier",
+        "model_agreement",
+    ]
+    out = pred[[col for col in keep_cols if col in pred.columns]].copy()
+    out.to_csv(output_path, index=False)
+    return out, output_path, None
+
+
+def _load_static_predictions_for_tour(tour: str) -> tuple[pd.DataFrame, Path]:
+    pred_path = MODELS_DIR / f"test_predictions_{tour}.csv"
+    if not pred_path.exists():
+        return pd.DataFrame(), pred_path
+    pred = pd.read_csv(pred_path, low_memory=False)
+    if "ensemble_prob_p1" not in pred.columns and "ensemble_prob" in pred.columns:
+        pred["ensemble_prob_p1"] = pred["ensemble_prob"]
+    return pred, pred_path
 
 
 def _simulate_strategy_on_matches(
@@ -123,24 +214,55 @@ def _simulate_strategy_on_matches(
     }
 
 
-def run_backtest_for_tour(tour: str, start_capital: float = START_CAPITAL) -> dict[str, Any]:
-    pred_path = MODELS_DIR / f"test_predictions_{tour}.csv"
-    if not pred_path.exists():
+def run_backtest_for_tour(
+    tour: str,
+    start_capital: float = START_CAPITAL,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    regenerate_predictions: bool = True,
+) -> dict[str, Any]:
+    if regenerate_predictions:
+        pred, pred_path, pred_message = _build_predictions_for_tour(tour=tour, start_date=start_date, end_date=end_date)
+        prediction_source = "regenerated_features"
+    else:
+        pred, pred_path = _load_static_predictions_for_tour(tour=tour)
+        pred_message = None
+        prediction_source = "static_test_predictions"
+
+    if pred.empty:
         return {
             "tour": tour,
             "status": "missing_predictions",
-            "message": f"Prediction file not found: {pred_path}",
+            "message": pred_message or f"Prediction file not found: {pred_path}",
+            "prediction_source": prediction_source,
+            "prediction_file": str(pred_path),
+            "backtest_start_date": start_date,
+            "backtest_end_date": end_date,
         }
 
-    pred = pd.read_csv(pred_path, low_memory=False)
     odds = _load_odds(ODDS_HISTORY_FILE)
+    if not odds.empty and "tour" in odds.columns:
+        odds = odds[odds["tour"].astype("string").str.lower() == tour].copy()
+
+    odds["match_date"] = pd.to_datetime(odds["match_date"], errors="coerce")
+    start_ts = _parse_date(start_date)
+    end_ts = _parse_date(end_date)
+    if start_ts is not None:
+        odds = odds[odds["match_date"] >= start_ts]
+    if end_ts is not None:
+        odds = odds[odds["match_date"] <= end_ts]
+
     merged = _join_predictions_with_odds(pred, odds)
 
     if merged.empty:
         return {
             "tour": tour,
             "status": "no_odds_overlap",
-            "message": "No overlapping rows between test predictions and odds_history.",
+            "message": "No overlapping rows between predictions and odds_history.",
+            "prediction_source": prediction_source,
+            "prediction_file": str(pred_path),
+            "backtest_start_date": start_date,
+            "backtest_end_date": end_date,
         }
 
     scored = _compute_edges(merged)
@@ -158,6 +280,9 @@ def run_backtest_for_tour(tour: str, start_capital: float = START_CAPITAL) -> di
             {
                 "tour": tour,
                 "strategy": strategy,
+                "prediction_source": prediction_source,
+                "backtest_start_date": start_date,
+                "backtest_end_date": end_date,
                 "start_capital": strat["start_capital"],
                 "end_capital": strat["end_capital"],
                 "profit": strat["profit"],
@@ -175,13 +300,33 @@ def run_backtest_for_tour(tour: str, start_capital: float = START_CAPITAL) -> di
     return {
         "tour": tour,
         "status": "ok",
+        "prediction_source": prediction_source,
+        "prediction_file": str(pred_path),
+        "backtest_start_date": start_date,
+        "backtest_end_date": end_date,
+        "rows_requested": int(len(pred)),
         "rows_with_odds": int(len(scored)),
         "results": strat_results,
     }
 
 
-def run_backtest(tours: tuple[str, ...] = ("atp", "wta"), start_capital: float = START_CAPITAL) -> dict[str, Any]:
-    reports = [run_backtest_for_tour(tour, start_capital=start_capital) for tour in tours]
+def run_backtest(
+    tours: tuple[str, ...] = ("atp", "wta"),
+    start_capital: float = START_CAPITAL,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    regenerate_predictions: bool = True,
+) -> dict[str, Any]:
+    reports = [
+        run_backtest_for_tour(
+            tour,
+            start_capital=start_capital,
+            start_date=start_date,
+            end_date=end_date,
+            regenerate_predictions=regenerate_predictions,
+        )
+        for tour in tours
+    ]
 
     summary_rows = []
     for rep in reports:
@@ -192,6 +337,10 @@ def run_backtest(tours: tuple[str, ...] = ("atp", "wta"), start_capital: float =
                     "strategy": "n/a",
                     "status": rep.get("status"),
                     "message": rep.get("message"),
+                    "prediction_source": rep.get("prediction_source"),
+                    "prediction_file": rep.get("prediction_file"),
+                    "backtest_start_date": rep.get("backtest_start_date"),
+                    "backtest_end_date": rep.get("backtest_end_date"),
                 }
             )
             continue
@@ -209,7 +358,25 @@ def run_backtest(tours: tuple[str, ...] = ("atp", "wta"), start_capital: float =
 
 
 def main() -> None:
-    report = run_backtest()
+    parser = argparse.ArgumentParser(description="Run betting strategy backtests on historical tennis data.")
+    parser.add_argument("--tours", nargs="+", choices=["atp", "wta"], default=["atp", "wta"], help="Tours to backtest")
+    parser.add_argument("--start-capital", type=float, default=START_CAPITAL, help="Starting bankroll per tour")
+    parser.add_argument("--start-date", default=None, help="Inclusive backtest start date (YYYY-MM-DD)")
+    parser.add_argument("--end-date", default=None, help="Inclusive backtest end date (YYYY-MM-DD)")
+    parser.add_argument(
+        "--static-predictions",
+        action="store_true",
+        help="Use saved test_predictions artifacts instead of regenerating predictions from historical feature rows",
+    )
+    args = parser.parse_args()
+
+    report = run_backtest(
+        tours=tuple(args.tours),
+        start_capital=args.start_capital,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        regenerate_predictions=not args.static_predictions,
+    )
     print(json.dumps(report, indent=2))
 
 
