@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from config import MODELS_DIR, ODDS_UPCOMING_FILE, PROCESSED_DIR, RAW_ATP, RAW_WTA
+from src.player_aliases import canonicalize_player_name, load_player_aliases, normalize_player_name
 
 try:
     from catboost import CatBoostClassifier
@@ -20,6 +22,9 @@ try:
     from xgboost import XGBClassifier
 except Exception:  # pragma: no cover
     XGBClassifier = None
+
+
+logger = logging.getLogger("predictor")
 
 
 def _safe_json_load(path: Path) -> dict[str, Any]:
@@ -125,7 +130,7 @@ def add_prediction_columns(df: pd.DataFrame, tour: str) -> pd.DataFrame:
 
 
 def _norm_name(name: Any) -> str:
-    return " ".join(str(name).lower().replace(".", " ").replace("-", " ").split())
+    return normalize_player_name(name)
 
 
 def _load_player_maps(tour: str) -> tuple[dict[str, str], dict[str, str]]:
@@ -275,18 +280,23 @@ def predict_from_odds(
     feature_cols: list[str] = list(schema.get("feature_cols", []))
 
     name_to_id, id_to_ioc = _load_player_maps(tour)
+    aliases = load_player_aliases()
     t_exact, t_norm = _load_tournament_country_map()
 
     rows: list[dict[str, Any]] = []
+    unresolved_names: list[str] = []
     for row in odds.to_dict(orient="records"):
         p1_name = row.get("player_1_resolved") or row.get("player_1")
         p2_name = row.get("player_2_resolved") or row.get("player_2")
         p1_id = row.get("player_1_id")
         p2_id = row.get("player_2_id")
 
-        p1_id = str(int(float(p1_id))) if pd.notna(p1_id) and str(p1_id).strip() else name_to_id.get(_norm_name(p1_name))
-        p2_id = str(int(float(p2_id))) if pd.notna(p2_id) and str(p2_id).strip() else name_to_id.get(_norm_name(p2_name))
+        p1_lookup = canonicalize_player_name(p1_name, aliases)
+        p2_lookup = canonicalize_player_name(p2_name, aliases)
+        p1_id = str(int(float(p1_id))) if pd.notna(p1_id) and str(p1_id).strip() else name_to_id.get(p1_lookup)
+        p2_id = str(int(float(p2_id))) if pd.notna(p2_id) and str(p2_id).strip() else name_to_id.get(p2_lookup)
         if not p1_id or not p2_id:
+            unresolved_names.append(f"{p1_name} vs {p2_name}")
             continue
 
         s1 = states.get(p1_id, {})
@@ -395,7 +405,19 @@ def predict_from_odds(
         rows.append(feat)
 
     if not rows:
+        if unresolved_names:
+            sample = ", ".join(unresolved_names[:5])
+            logger.warning(
+                "No %s predictions built from odds; unresolved player IDs for %d match(es): %s",
+                tour,
+                len(unresolved_names),
+                sample,
+            )
         return pd.DataFrame()
+
+    if unresolved_names:
+        sample = ", ".join(unresolved_names[:5])
+        logger.warning("Skipped %d %s odds row(s) with unresolved player IDs: %s", len(unresolved_names), tour, sample)
 
     upcoming_features = pd.DataFrame(rows)
     pred = add_prediction_columns(upcoming_features, tour=tour)

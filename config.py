@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
 from pathlib import Path
 
 # Base paths
@@ -43,7 +44,7 @@ SURFACE_LIST = ["Hard", "Clay", "Grass", "Carpet"]
 CATBOOST_WEIGHT = 0.6
 XGBOOST_WEIGHT = 0.4
 OPTUNA_TRIALS = 50
-TRAIN_CUTOFF = "2025-01-01"
+TRAIN_CUTOFF = (date.today() - timedelta(days=180)).strftime("%Y-%m-%d")
 
 # Value betting
 MIN_EDGE_THRESHOLD = 0.05

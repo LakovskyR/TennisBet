@@ -25,6 +25,8 @@ from config import (
     ODDS_UPCOMING_FILE,
     PREDICTION_LOG_FILE,
     PROCESSED_DIR,
+    RAW_ATP,
+    RAW_WTA,
 )
 from src.data_pipeline import run_pipeline
 from src.data_updater import get_staleness_status, update_data_sources
@@ -217,6 +219,32 @@ def _edge_band(edge: Any) -> str:
 
 def _tour_list(tour_filter: str) -> list[str]:
     return ["atp", "wta"] if tour_filter == "both" else [tour_filter]
+
+
+@st.cache_data(show_spinner=False)
+def _known_player_ids(tour: str) -> set[str]:
+    players_file = RAW_ATP / "atp_players.csv" if tour == "atp" else RAW_WTA / "wta_players.csv"
+    if not players_file.exists():
+        return set()
+    try:
+        df = pd.read_csv(players_file, usecols=["player_id"], low_memory=False)
+    except Exception:
+        return set()
+
+    ids: set[str] = set()
+    for value in df["player_id"].tolist():
+        try:
+            if pd.isna(value):
+                continue
+        except Exception:
+            pass
+        try:
+            ids.add(str(int(float(value))))
+        except Exception:
+            text = str(value).strip()
+            if text:
+                ids.add(text)
+    return ids
 
 
 def _load_bankroll_state() -> dict[str, Any]:
@@ -926,9 +954,19 @@ def main() -> None:
 
                     if not all([tourney_name, winner_name, loser_name, winner_id, loser_id]):
                         st.error("Tournament, player names, and player IDs are required.")
+                    elif winner_id == loser_id:
+                        st.error("Winner ID and loser ID must be different.")
                     else:
-                        _append_custom_match(entry_tour, payload)
-                        st.success("Custom match saved.")
+                        known_ids = _known_player_ids(entry_tour)
+                        missing_ids = [pid for pid in (winner_id, loser_id) if pid not in known_ids]
+                        if missing_ids:
+                            st.error(
+                                f"Unknown {entry_tour.upper()} player ID(s): {', '.join(missing_ids)}. "
+                                "Use IDs from the current player reference file."
+                            )
+                        else:
+                            _append_custom_match(entry_tour, payload)
+                            st.success("Custom match saved.")
 
             uploaded_custom = st.file_uploader("Upload custom CSV", type=["csv"], key="custom_match_csv")
             if uploaded_custom is not None and st.button("Import custom CSV", key="import_custom_csv"):

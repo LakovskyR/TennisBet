@@ -29,6 +29,7 @@ from config import (
 from src.data_pipeline import run_pipeline
 from src.data_updater import get_staleness_status, update_data_sources
 from src.elo_engine import run_elo
+from src.model_training import maybe_retrain_models
 from src.odds_scraper import refresh_odds
 from src.predictor import predict_from_odds
 from src.value_engine import generate_recommendations
@@ -492,6 +493,8 @@ def _send_email(subject: str, html_body: str) -> None:
 def run_daily_report(
     tours: tuple[str, ...] = ("atp", "wta"),
     send_email: bool = True,
+    bankroll: float | None = None,
+    skip_empty: bool = False,
 ) -> dict[str, Any]:
     _load_dotenv_if_present()
     _load_gmail_secrets_if_present()
@@ -504,9 +507,13 @@ def run_daily_report(
         "warnings": [],
     }
 
-    bankroll = _load_bankroll_state()
-    capital = float(bankroll.get("capital", DEFAULT_CAPITAL))
-    report["bankroll"] = bankroll
+    bankroll_state = _load_bankroll_state()
+    capital = float(bankroll) if bankroll is not None else float(bankroll_state.get("capital", DEFAULT_CAPITAL))
+    report["bankroll"] = {
+        **bankroll_state,
+        "capital": capital,
+        "override_used": bankroll is not None,
+    }
 
     try:
         report["steps"]["data_update"] = update_data_sources()
@@ -527,6 +534,17 @@ def run_daily_report(
         report["steps"]["elo"] = run_elo(incremental=True)
     except Exception as exc:
         report["errors"].append(f"ELO update failed: {exc}")
+
+    try:
+        retrain_report = maybe_retrain_models(tours=tours)
+        report["steps"]["model_retraining"] = retrain_report
+        if retrain_report.get("triggered"):
+            report["warnings"].append(
+                f"Models retrained for: {', '.join(retrain_report.get('tours', []))}."
+            )
+    except Exception as exc:
+        report["errors"].append(f"Model retraining failed: {exc}")
+        report["steps"]["model_retraining"] = {"triggered": False, "error": str(exc)}
 
     try:
         odds_report = refresh_odds()
@@ -579,17 +597,20 @@ def run_daily_report(
     report["email_subject"] = subject
 
     if send_email:
-        required = ["EMAIL_TO", "EMAIL_FROM", "EMAIL_PASSWORD"]
-        missing = [key for key in required if not os.environ.get(key)]
-        if missing:
-            report["errors"].append(f"Missing email configuration: {', '.join(missing)}")
+        if skip_empty and report["recommendations"].empty and not report["errors"]:
+            report["steps"]["email"] = {"sent": False, "reason": "skip_empty_no_recommendations"}
         else:
-            try:
-                _send_email(subject, html_body)
-                report["steps"]["email"] = {"sent": True}
-            except Exception as exc:
-                report["errors"].append(f"Email send failed: {exc}")
-                report["steps"]["email"] = {"sent": False, "error": str(exc)}
+            required = ["EMAIL_TO", "EMAIL_FROM", "EMAIL_PASSWORD"]
+            missing = [key for key in required if not os.environ.get(key)]
+            if missing:
+                report["errors"].append(f"Missing email configuration: {', '.join(missing)}")
+            else:
+                try:
+                    _send_email(subject, html_body)
+                    report["steps"]["email"] = {"sent": True}
+                except Exception as exc:
+                    report["errors"].append(f"Email send failed: {exc}")
+                    report["steps"]["email"] = {"sent": False, "error": str(exc)}
     else:
         report["steps"]["email"] = {"sent": False, "reason": "dry_run"}
 
@@ -602,7 +623,9 @@ def run_daily_report(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the headless TennisBet daily report cycle")
     parser.add_argument("--tours", default="atp,wta", help="Comma-separated tours, default atp,wta")
+    parser.add_argument("--bankroll", type=float, default=None, help="Override bankroll for this run")
     parser.add_argument("--dry-run", action="store_true", help="Run without sending email")
+    parser.add_argument("--skip-empty", action="store_true", help="Skip email send when no bets are recommended")
     args = parser.parse_args()
 
     APP_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -616,7 +639,12 @@ def main() -> None:
     )
 
     tours = tuple(t.strip() for t in args.tours.split(",") if t.strip())
-    report = run_daily_report(tours=tours, send_email=not args.dry_run)
+    report = run_daily_report(
+        tours=tours,
+        send_email=not args.dry_run,
+        bankroll=args.bankroll,
+        skip_empty=args.skip_empty,
+    )
     logging.info("Daily report cycle completed")
     print(json.dumps(report, indent=2))
 
