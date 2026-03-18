@@ -523,19 +523,33 @@ def update_data_sources() -> dict[str, Any]:
             "git_success": git_result.success,
         }
 
-    last_new_match = max(
-        [
-            datetime.strptime(info["latest_raw_match_date"], DATE_FMT).date()
-            for info in report["tours"].values()
-            if info.get("latest_raw_match_date")
-        ],
-        default=None,
-    )
+    # Collect candidate dates from raw Sackmann files
+    candidate_dates: list[date] = [
+        datetime.strptime(info["latest_raw_match_date"], DATE_FMT).date()
+        for info in report["tours"].values()
+        if info.get("latest_raw_match_date")
+    ]
+
+    # Also consider the processed master files (which include custom/scraped matches)
+    processed_date = get_latest_match_date_from_processed()
+    if processed_date is not None:
+        candidate_dates.append(processed_date)
+
+    # Preserve the previous last_new_match if it's more recent (e.g. from pipeline runs)
+    prev_state = load_last_update()
+    prev_last = prev_state.get("last_new_match")
+    if isinstance(prev_last, str) and prev_last:
+        try:
+            candidate_dates.append(datetime.strptime(prev_last, DATE_FMT).date())
+        except Exception:
+            pass
+
+    last_new_match = max(candidate_dates) if candidate_dates else None
 
     staleness = get_staleness_status(last_new_match)
     report["staleness"] = staleness
 
-    state = load_last_update()
+    state = prev_state
     state.update(
         {
             "updated_at": report["timestamp"],

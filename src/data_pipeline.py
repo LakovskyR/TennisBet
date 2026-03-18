@@ -17,6 +17,7 @@ from config import (
     RAW_ATP,
     RAW_WTA,
 )
+from src.data_updater import get_staleness_status
 
 TOUR_RAW = {
     "atp": RAW_ATP,
@@ -258,12 +259,14 @@ def run_pipeline(incremental: bool = True) -> dict[str, Any]:
         for r in results.values()
         if r.get("latest_match_date")
     ]
+    latest_match = max(latest_dates) if latest_dates else None
 
     state.update(
         {
             "pipeline_last_run": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "pipeline": results,
-            "last_new_match": max(latest_dates).strftime(DATE_FMT) if latest_dates else None,
+            "last_new_match": latest_match.strftime(DATE_FMT) if latest_match else None,
+            "staleness": get_staleness_status(latest_match),
         }
     )
     LAST_UPDATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import logging
 import os
 import smtplib
 from datetime import UTC, datetime
@@ -15,6 +16,7 @@ import pandas as pd
 import requests
 
 from config import (
+    APP_LOG_FILE,
     BANKROLL_LOG_FILE,
     DEFAULT_CAPITAL,
     LAST_UPDATE_FILE,
@@ -25,7 +27,7 @@ from config import (
     PROCESSED_DIR,
 )
 from src.data_pipeline import run_pipeline
-from src.data_updater import update_data_sources
+from src.data_updater import get_staleness_status, update_data_sources
 from src.elo_engine import run_elo
 from src.odds_scraper import refresh_odds
 from src.predictor import predict_from_odds
@@ -192,6 +194,17 @@ def _load_last_update() -> dict[str, Any]:
         return json.loads(text) if text.strip() else {}
     except Exception:
         return {}
+
+
+def _resolve_staleness(state: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    last_new_match = state.get("last_new_match")
+    if isinstance(last_new_match, str) and last_new_match:
+        try:
+            last_new_date = datetime.strptime(last_new_match, "%Y-%m-%d").date()
+            return get_staleness_status(last_new_date), last_new_match
+        except Exception:
+            pass
+    return state.get("staleness", {}), str(last_new_match or "unknown")
 
 
 def _load_prediction_log() -> pd.DataFrame:
@@ -419,8 +432,7 @@ def _build_html_report(report: dict[str, Any]) -> str:
         items = "".join(f"<li>{html.escape(msg)}</li>" for msg in warnings)
         warning_block = f"<h2>Warnings</h2><ul>{items}</ul>"
 
-    staleness = state.get("staleness", {})
-    last_new_match = state.get("last_new_match", "unknown")
+    staleness, last_new_match = _resolve_staleness(state)
     odds_message = odds_report.get("message", "Odds refresh did not run.")
 
     return f"""
@@ -593,8 +605,19 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Run without sending email")
     args = parser.parse_args()
 
+    APP_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+        handlers=[
+            logging.FileHandler(APP_LOG_FILE, encoding="utf-8"),
+            logging.StreamHandler()
+        ]
+    )
+
     tours = tuple(t.strip() for t in args.tours.split(",") if t.strip())
     report = run_daily_report(tours=tours, send_email=not args.dry_run)
+    logging.info("Daily report cycle completed")
     print(json.dumps(report, indent=2))
 
 

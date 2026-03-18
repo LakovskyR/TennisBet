@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -13,9 +13,11 @@ MODELS_DIR = BASE_DIR / "models"
 ODDS_DIR = DATA_DIR / "odds"
 CUSTOM_DIR = DATA_DIR / "custom"
 META_DIR = DATA_DIR / "meta"
+LOG_DIR = BASE_DIR / "logs"
 
 # Core files
 LAST_UPDATE_FILE = META_DIR / "last_update.json"
+APP_LOG_FILE = LOG_DIR / "app.log"
 BANKROLL_LOG_FILE = META_DIR / "bankroll_log.json"
 PREDICTION_LOG_FILE = META_DIR / "prediction_log.csv"
 ODDS_UPCOMING_FILE = ODDS_DIR / "upcoming_odds.csv"
@@ -50,7 +52,7 @@ MAX_DAILY_CAPITAL_PCT = 0.50
 MIN_BET_AMOUNT = 0.50
 
 # Bankroll
-DEFAULT_CAPITAL = 5.00
+DEFAULT_CAPITAL = 100.00
 
 # Scraping/matching
 FLASHSCORE_DELAY = 3

@@ -2,9 +2,9 @@
   "initialized_at": "2026-03-14T00:00:00Z",
   "last_new_match": "2026-03-14",
   "staleness": {
-    "days_behind": 451,
-    "status": "critical",
-    "message": "Data is critically stale (451 days). Model accuracy is likely degrading."
+    "days_behind": 1,
+    "status": "fresh",
+    "message": "Data is fresh."
   },
   "updated_at": "2026-03-14T17:29:02Z",
   "sackmann_pull": "2026-03-14T17:29:02Z",
@@ -89,7 +89,7 @@
     },
     "combined": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\player_features.csv"
   },
-  "model_last_trained": "2026-03-14T23:44:54Z",
+  "model_last_trained": "2026-03-15T00:29:54Z",
   "model_training": {
     "tours": [
       "atp",
