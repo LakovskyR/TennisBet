@@ -10,6 +10,7 @@ import pandas as pd
 
 from config import (
     DEFAULT_CAPITAL,
+    KELLY_FRACTION,
     MAX_DAILY_BETS,
     MAX_DAILY_CAPITAL_PCT,
     MIN_BET_AMOUNT,
@@ -229,27 +230,22 @@ def _allocate_bankroll_with_overrides(
     if value_bets.empty:
         return value_bets
 
-    conf_mult = {"HIGH": 1.3, "MEDIUM": 1.0, "LOW": 0.7}
-
     out = value_bets.copy()
-    out = out.sort_values("selected_edge", ascending=False).head(max_daily_bets).copy()
+    out["selected_prob"] = pd.to_numeric(out["selected_prob"], errors="coerce")
+    out["selected_odds"] = pd.to_numeric(out["selected_odds"], errors="coerce")
 
-    raw_pct = []
-    for edge, conf in out[["selected_edge", "confidence_tier"]].itertuples(index=False):
-        base_pct = 0.10
-        edge_bonus = max(0.0, float(edge) - min_edge_threshold) * 2.0
-        pct = min(base_pct + edge_bonus, 0.40) * conf_mult.get(str(conf), 0.8)
-        raw_pct.append(pct)
+    b = out["selected_odds"] - 1.0
+    q = 1.0 - out["selected_prob"]
+    full_kelly = np.where(
+        b > 0,
+        ((b * out["selected_prob"]) - q) / b,
+        0.0,
+    )
+    out["kelly_fraction_full"] = np.clip(full_kelly, 0.0, None)
+    out["kelly_fraction"] = out["kelly_fraction_full"] * KELLY_FRACTION
 
-    out["raw_allocation_pct"] = raw_pct
-
-    n = len(out)
-    if n == 1:
-        out["raw_allocation_pct"] = out["raw_allocation_pct"].clip(lower=0.20, upper=0.40)
-    elif n == 2:
-        out["raw_allocation_pct"] = out["raw_allocation_pct"].clip(lower=0.15, upper=0.30)
-    elif n >= 3:
-        out["raw_allocation_pct"] = out["raw_allocation_pct"].clip(lower=0.10, upper=0.20)
+    out = out.sort_values(["kelly_fraction", "selected_edge"], ascending=[False, False]).head(max_daily_bets).copy()
+    out["raw_allocation_pct"] = out["kelly_fraction"].clip(lower=0.0, upper=max_daily_capital_pct)
 
     total_pct = float(out["raw_allocation_pct"].sum())
     if total_pct > max_daily_capital_pct and total_pct > 0:
@@ -258,14 +254,21 @@ def _allocate_bankroll_with_overrides(
     else:
         out["allocation_pct"] = out["raw_allocation_pct"]
 
+    if capital <= 0:
+        out["recommended_stake"] = 0.0
+        return out
+
     out["recommended_stake"] = (capital * out["allocation_pct"]).round(2)
-    out["recommended_stake"] = out["recommended_stake"].clip(lower=MIN_BET_AMOUNT)
+    positive_mask = out["allocation_pct"] > 0
+    out.loc[positive_mask, "recommended_stake"] = out.loc[positive_mask, "recommended_stake"].clip(lower=MIN_BET_AMOUNT)
+    out.loc[~positive_mask, "recommended_stake"] = 0.0
 
     total_stake = float(out["recommended_stake"].sum())
     max_stake = capital * max_daily_capital_pct
     if total_stake > max_stake and total_stake > 0:
         out["recommended_stake"] = (out["recommended_stake"] * (max_stake / total_stake)).round(2)
-        out["recommended_stake"] = out["recommended_stake"].clip(lower=MIN_BET_AMOUNT)
+        positive_mask = out["recommended_stake"] > 0
+        out.loc[positive_mask, "recommended_stake"] = out.loc[positive_mask, "recommended_stake"].clip(lower=MIN_BET_AMOUNT)
 
     return out
 

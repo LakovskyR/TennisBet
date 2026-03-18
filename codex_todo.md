@@ -101,7 +101,7 @@
 - Files: `src/odds_scraper.py`, `src/value_engine.py`
 
 ### 9.3 Proper Kelly Criterion
-- [ ] Replace simplified edge-based allocation with fractional Kelly
+- [x] Replace simplified edge-based allocation with fractional Kelly
 - Current sizing: `base_pct + edge_bonus * confidence_mult` (heuristic)
 - Kelly: `f* = (bp - q) / b` where b=odds-1, p=model_prob, q=1-p
 - Use fractional Kelly (e.g. 0.25x) for safety
