@@ -1,6 +1,6 @@
 {
   "tour": "atp",
-  "generated_at": "2026-03-14T23:38:08Z",
+  "generated_at": "2026-03-19T03:38:41Z",
   "checks": {
     "rows": 192721,
     "days_since_non_negative": true,
@@ -40,7 +40,7 @@
       "p1_days_since_last_match": 0,
       "p2_days_since_last_match": 0,
       "h2h_total": 0,
-      "p1_matches_played_before": 246,
+      "p1_matches_played_before": 248,
       "p2_matches_played_before": 15,
       "p1_wins": 1
     },
@@ -73,10 +73,10 @@
       "match_key": "1997-741|19970616|102401|102925|6-4 7-5",
       "p1_id": "102401",
       "p2_id": "102925",
-      "p1_days_since_last_match": 7,
+      "p1_days_since_last_match": 0,
       "p2_days_since_last_match": 7,
       "h2h_total": 0,
-      "p1_matches_played_before": 92,
+      "p1_matches_played_before": 93,
       "p2_matches_played_before": 31,
       "p1_wins": 1
     },
@@ -86,10 +86,10 @@
       "p1_id": "100240",
       "p2_id": "101020",
       "p1_days_since_last_match": 19,
-      "p2_days_since_last_match": 47,
+      "p2_days_since_last_match": 0,
       "h2h_total": 0,
       "p1_matches_played_before": 129,
-      "p2_matches_played_before": 44,
+      "p2_matches_played_before": 48,
       "p1_wins": 0
     },
     {

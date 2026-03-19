@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import smtplib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -19,9 +19,12 @@ from config import (
     APP_LOG_FILE,
     BANKROLL_LOG_FILE,
     DEFAULT_CAPITAL,
+    KELLY_FRACTION,
     LAST_UPDATE_FILE,
     MAX_DAILY_BETS,
     MIN_EDGE_THRESHOLD,
+    MODELS_DIR,
+    ODDS_HISTORY_FILE,
     ODDS_UPCOMING_FILE,
     PREDICTION_LOG_FILE,
     PROCESSED_DIR,
@@ -31,7 +34,18 @@ from src.data_updater import get_staleness_status, update_data_sources
 from src.elo_engine import run_elo
 from src.model_training import maybe_retrain_models
 from src.odds_scraper import refresh_odds
+from src.performance_report import generate_performance_report
 from src.predictor import predict_from_odds
+from src.sqlite_storage import (
+    initialize_database,
+    load_bankroll_state_payload,
+    load_prediction_log_frame,
+    sync_bankroll_state,
+    sync_odds_frame,
+    sync_player_aliases,
+    sync_prediction_log_frame,
+    sync_reference_players,
+)
 from src.value_engine import generate_recommendations
 
 PREDICTION_LOG_COLUMNS = [
@@ -112,6 +126,9 @@ def _load_gmail_secrets_if_present(path: Path = Path("GMAIL_secrets.txt")) -> No
 
 
 def _bootstrap_files() -> None:
+    initialize_database()
+    sync_reference_players()
+    sync_player_aliases()
     PREDICTION_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     if not PREDICTION_LOG_FILE.exists():
         pd.DataFrame(columns=PREDICTION_LOG_COLUMNS).to_csv(PREDICTION_LOG_FILE, index=False)
@@ -127,6 +144,10 @@ def _bootstrap_files() -> None:
             ),
             encoding="utf-8",
         )
+    sync_prediction_log_frame(_safe_read_csv(PREDICTION_LOG_FILE, PREDICTION_LOG_COLUMNS))
+    sync_odds_frame(_safe_read_csv(ODDS_HISTORY_FILE), mark_current_upcoming=False, source_name="odds_history")
+    sync_odds_frame(_safe_read_csv(ODDS_UPCOMING_FILE), mark_current_upcoming=True, source_name="odds_upcoming")
+    sync_bankroll_state(_load_bankroll_state())
 
 
 def _download_raw_reference_file(url: str, destination: Path) -> None:
@@ -173,13 +194,7 @@ def _safe_read_csv(path: Path, columns: list[str] | None = None) -> pd.DataFrame
 
 
 def _load_bankroll_state() -> dict[str, Any]:
-    if not BANKROLL_LOG_FILE.exists():
-        return {"capital": float(DEFAULT_CAPITAL), "updated_at": None, "history": []}
-    try:
-        text = BANKROLL_LOG_FILE.read_text(encoding="utf-8-sig")
-        state = json.loads(text) if text.strip() else {}
-    except Exception:
-        state = {}
+    state = load_bankroll_state_payload(fallback_to_file=False)
     if "capital" not in state:
         state["capital"] = float(DEFAULT_CAPITAL)
     if "history" not in state or not isinstance(state["history"], list):
@@ -209,7 +224,11 @@ def _resolve_staleness(state: dict[str, Any]) -> tuple[dict[str, Any], str]:
 
 
 def _load_prediction_log() -> pd.DataFrame:
-    return _safe_read_csv(PREDICTION_LOG_FILE, PREDICTION_LOG_COLUMNS)
+    df = load_prediction_log_frame(fallback_to_csv=False)
+    for col in PREDICTION_LOG_COLUMNS:
+        if col not in df.columns:
+            df[col] = pd.NA
+    return df[PREDICTION_LOG_COLUMNS]
 
 
 def _save_prediction_log(df: pd.DataFrame) -> None:
@@ -218,6 +237,7 @@ def _save_prediction_log(df: pd.DataFrame) -> None:
         if col not in df.columns:
             df[col] = pd.NA
     df[PREDICTION_LOG_COLUMNS].to_csv(PREDICTION_LOG_FILE, index=False)
+    sync_prediction_log_frame(df[PREDICTION_LOG_COLUMNS].copy())
 
 
 def _prediction_id(row: pd.Series | dict[str, Any], tour: str) -> str:
@@ -381,6 +401,145 @@ def _html_table(df: pd.DataFrame, columns: list[str]) -> str:
     )
 
 
+def _display_model_name(model_name: str) -> str:
+    aliases = {
+        "catboost": "CatBoost",
+        "xgboost": "XGBoost",
+        "lgbm": "LightGBM",
+        "rf": "RandomForest",
+        "elasticnet": "ElasticNet",
+        "logreg": "LogReg",
+    }
+    return aliases.get(str(model_name).lower(), str(model_name))
+
+
+def _format_model_type(report_payload: dict[str, Any]) -> str:
+    ensemble_config = report_payload.get("ensemble_config", {})
+    weights = ensemble_config.get("weights", {})
+    if not isinstance(weights, dict) or not weights:
+        return "Unavailable"
+    ordered = sorted(weights.items(), key=lambda item: float(item[1]), reverse=True)
+    labels = "/".join(_display_model_name(name) for name, _ in ordered)
+    pct = "/".join(f"{float(weight) * 100:.0f}%" for _, weight in ordered)
+    if len(ordered) == 1:
+        return labels
+    return f"{labels} ensemble ({pct} blend)"
+
+
+def _load_model_info(tours: tuple[str, ...]) -> pd.DataFrame:
+    rows: list[dict[str, str]] = []
+    for tour in tours:
+        report_path = MODELS_DIR / f"model_report_{tour}.json"
+        if not report_path.exists():
+            continue
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8-sig"))
+        except Exception:
+            continue
+        metrics = payload.get("metrics", {}).get("ensemble", {})
+        split_summary = payload.get("split_summary", {})
+        train_summary = split_summary.get("train", {})
+        test_summary = split_summary.get("test", {})
+        trained_at = str(payload.get("trained_at", ""))[:10] or "unknown"
+        rows.append(
+            {
+                "tour": str(tour).upper(),
+                "model_type": _format_model_type(payload),
+                "test_accuracy": f"{float(metrics.get('accuracy', 0.0)):.2%}",
+                "log_loss": f"{float(metrics.get('log_loss', 0.0)):.3f}",
+                "ece": f"{float(metrics.get('ece', 0.0)):.3f}",
+                "last_trained": trained_at,
+                "training_window": (
+                    f"{train_summary.get('date_min', 'n/a')} → {train_summary.get('date_max', 'n/a')} "
+                    f"({int(payload.get('rows_train', 0)):,} rows)"
+                ),
+                "test_window": (
+                    f"{test_summary.get('date_min', 'n/a')} → {test_summary.get('date_max', 'n/a')} "
+                    f"({int(payload.get('rows_test', 0)):,} rows)"
+                ),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _compute_30day_forecast(capital: float, lookback_days: int = 90) -> dict[str, Any]:
+    log_df = _load_prediction_log().copy()
+    if log_df.empty:
+        return {
+            "status": "insufficient_history",
+            "message": "Insufficient betting history for 30-day forecast. Need 30+ resolved bets.",
+            "lookback_days": lookback_days,
+        }
+
+    log_df["resolved_dt"] = pd.to_datetime(log_df.get("resolved_at"), errors="coerce", utc=True)
+    log_df["match_dt"] = pd.to_datetime(log_df.get("match_date"), errors="coerce", utc=True)
+    status = log_df.get("status", pd.Series("", index=log_df.index)).astype(str).str.lower()
+    result = log_df.get("result", pd.Series("", index=log_df.index)).astype(str).str.lower()
+    log_df["analysis_dt"] = log_df["resolved_dt"].where(log_df["resolved_dt"].notna(), log_df["match_dt"])
+    cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
+    resolved_mask = status.eq("resolved") | result.isin(["win", "loss", "push"])
+    recent = log_df[resolved_mask & (log_df["analysis_dt"] >= cutoff)].copy()
+    if len(recent) < 30:
+        return {
+            "status": "insufficient_history",
+            "message": "Insufficient betting history for 30-day forecast. Need 30+ resolved bets.",
+            "lookback_days": lookback_days,
+            "resolved_bets": int(len(recent)),
+        }
+
+    recent["edge"] = pd.to_numeric(recent.get("edge"), errors="coerce")
+    recent = recent[recent["edge"].notna()].copy()
+    if len(recent) < 30:
+        return {
+            "status": "insufficient_history",
+            "message": "Insufficient betting history for 30-day forecast. Need 30+ resolved bets.",
+            "lookback_days": lookback_days,
+            "resolved_bets": int(len(recent)),
+        }
+
+    bet_days = recent["analysis_dt"].dt.date.nunique()
+    avg_bets_per_day = float(len(recent) / max(bet_days, 1))
+    avg_edge = float(recent["edge"].mean())
+    edge_std = float(recent["edge"].std(ddof=1)) if len(recent) > 1 else 0.0
+    edge_se = edge_std / max(len(recent) ** 0.5, 1.0)
+    edge_ci = 1.96 * edge_se
+
+    win_mask = result.eq("win")
+    loss_mask = result.eq("loss")
+    win_loss = recent[win_mask | loss_mask].copy()
+    hit_rate = float(win_mask.loc[win_loss.index].mean()) if not win_loss.empty else 0.0
+
+    def _project(edge_value: float) -> tuple[float, float]:
+        daily_return = avg_bets_per_day * KELLY_FRACTION * edge_value
+        daily_return = max(daily_return, -0.99)
+        multiplier = float((1.0 + daily_return) ** 30)
+        return daily_return, multiplier
+
+    conservative_daily_return, conservative_multiplier = _project(avg_edge - edge_ci)
+    expected_daily_return, expected_multiplier = _project(avg_edge)
+    optimistic_daily_return, optimistic_multiplier = _project(avg_edge + edge_ci)
+
+    return {
+        "status": "ok",
+        "lookback_days": lookback_days,
+        "resolved_bets": int(len(recent)),
+        "hit_rate": hit_rate,
+        "avg_edge": avg_edge,
+        "avg_bets_per_day": avg_bets_per_day,
+        "kelly_fraction": float(KELLY_FRACTION),
+        "capital_start": float(capital),
+        "conservative_daily_return": conservative_daily_return,
+        "expected_daily_return": expected_daily_return,
+        "optimistic_daily_return": optimistic_daily_return,
+        "conservative_multiplier": conservative_multiplier,
+        "expected_multiplier": expected_multiplier,
+        "optimistic_multiplier": optimistic_multiplier,
+        "conservative_capital": float(capital) * conservative_multiplier,
+        "expected_capital": float(capital) * expected_multiplier,
+        "optimistic_capital": float(capital) * optimistic_multiplier,
+    }
+
+
 def _build_html_report(report: dict[str, Any]) -> str:
     recs: pd.DataFrame = report["recommendations"]
     closest: pd.DataFrame = report["closest"]
@@ -389,6 +548,9 @@ def _build_html_report(report: dict[str, Any]) -> str:
     state = report["state"]
     bankroll = report["bankroll"]
     odds_report = report["steps"].get("odds_refresh", {})
+    performance_report = report.get("performance_report", {})
+    model_info: pd.DataFrame = report.get("model_info", pd.DataFrame())
+    forecast_30day: dict[str, Any] = report.get("forecast_30day", {})
 
     recommendation_block = ""
     if recs.empty:
@@ -433,6 +595,63 @@ def _build_html_report(report: dict[str, Any]) -> str:
         items = "".join(f"<li>{html.escape(msg)}</li>" for msg in warnings)
         warning_block = f"<h2>Warnings</h2><ul>{items}</ul>"
 
+    performance_block = ""
+    if performance_report:
+        output_path = performance_report.get("output_path", "")
+        summary_text = performance_report.get("summary_text", "")
+        performance_block = (
+            "<h2>Weekly Performance Dashboard</h2>"
+            f"<p><strong>Status:</strong> {html.escape(str(performance_report.get('status', 'unknown')))}</p>"
+            f"<p><strong>HTML path:</strong> {html.escape(str(output_path))}</p>"
+            f"<pre>{html.escape(str(summary_text))}</pre>"
+        )
+
+    model_info_block = ""
+    if not model_info.empty:
+        model_info_block = (
+            "<h2>Model Info</h2>"
+            + _html_table(
+                model_info,
+                [
+                    "tour",
+                    "model_type",
+                    "test_accuracy",
+                    "log_loss",
+                    "ece",
+                    "last_trained",
+                    "training_window",
+                    "test_window",
+                ],
+            )
+        )
+
+    forecast_block = ""
+    if forecast_30day:
+        if forecast_30day.get("status") != "ok":
+            forecast_block = (
+                "<h2>30-Day Strategy Outlook</h2>"
+                f"<p>{html.escape(str(forecast_30day.get('message', 'Forecast unavailable.')))}</p>"
+            )
+        else:
+            forecast_block = (
+                f"<h2>30-Day Strategy Outlook (based on last {int(forecast_30day.get('lookback_days', 90))} days)</h2>"
+                "<ul>"
+                f"<li>Resolved bets: {int(forecast_30day.get('resolved_bets', 0))} | "
+                f"Hit rate: {float(forecast_30day.get('hit_rate', 0.0)):.1%} | "
+                f"Avg edge: {float(forecast_30day.get('avg_edge', 0.0)):.1%} | "
+                f"Avg bets/day: {float(forecast_30day.get('avg_bets_per_day', 0.0)):.2f}</li>"
+                f"<li>Conservative estimate: EUR {float(forecast_30day.get('capital_start', 0.0)):.2f} → "
+                f"EUR {float(forecast_30day.get('conservative_capital', 0.0)):.2f} "
+                f"(×{float(forecast_30day.get('conservative_multiplier', 0.0)):.2f})</li>"
+                f"<li>Expected estimate: EUR {float(forecast_30day.get('capital_start', 0.0)):.2f} → "
+                f"EUR {float(forecast_30day.get('expected_capital', 0.0)):.2f} "
+                f"(×{float(forecast_30day.get('expected_multiplier', 0.0)):.2f})</li>"
+                f"<li>Optimistic estimate: EUR {float(forecast_30day.get('capital_start', 0.0)):.2f} → "
+                f"EUR {float(forecast_30day.get('optimistic_capital', 0.0)):.2f} "
+                f"(×{float(forecast_30day.get('optimistic_multiplier', 0.0)):.2f})</li>"
+                "</ul>"
+            )
+
     staleness, last_new_match = _resolve_staleness(state)
     odds_message = odds_report.get("message", "Odds refresh did not run.")
 
@@ -462,7 +681,10 @@ def _build_html_report(report: dict[str, Any]) -> str:
     <p><strong>Analyzed matches:</strong> {int(report["analyzed_matches"])}</p>
     <p><strong>Odds status:</strong> {html.escape(str(odds_message))}</p>
   </div>
+  {performance_block}
   {recommendation_block}
+  {model_info_block}
+  {forecast_block}
   {warning_block}
   {error_block}
 </body>
@@ -566,6 +788,8 @@ def run_daily_report(
     report["closest"] = recommendation_bundle["closest"]
     report["analyzed_matches"] = recommendation_bundle["analyzed_matches"]
     report["total_stake"] = recommendation_bundle["total_stake"]
+    report["model_info"] = _load_model_info(tours)
+    report["forecast_30day"] = _compute_30day_forecast(capital=capital)
     report["steps"]["recommendations"] = {
         "by_tour": {
             tour: {
@@ -587,6 +811,17 @@ def run_daily_report(
         report["steps"]["prediction_log"] = {"rows_logged": 0}
 
     report["state"] = _load_last_update()
+
+    if datetime.today().weekday() == 0:
+        try:
+            performance_output = PROCESSED_DIR / "performance_report.html"
+            perf_report = generate_performance_report(output_path=performance_output, lookback_days=90)
+            report["performance_report"] = perf_report
+            report["steps"]["performance_report"] = perf_report
+            logging.info("Performance report generated at %s", perf_report.get("output_path"))
+        except Exception as exc:
+            report["errors"].append(f"Performance report generation failed: {exc}")
+            report["steps"]["performance_report"] = {"status": "error", "error": str(exc)}
 
     html_body = _build_html_report(report)
     REPORT_HTML_FILE.parent.mkdir(parents=True, exist_ok=True)

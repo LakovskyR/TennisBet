@@ -1,0 +1,131 @@
+name: Daily Data Update
+
+on:
+  schedule:
+    # Run at 05:00 UTC daily (2 hours before daily_bet.yml at 07:00)
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      force_full:
+        description: "Force full re-download (not incremental)"
+        required: false
+        default: "false"
+        type: boolean
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed for git push
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          lfs: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Setup Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          install-chromedriver: true
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── Step 1: ATP data from TML-Database (fast, no browser needed) ──
+      - name: Update ATP data from TML-Database
+        run: |
+          echo "=== Downloading ATP 2025 + 2026 from TML-Database ==="
+          python -m src.tml_ingest --years 2025 2026
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      # ── Step 2: WTA data via Flashscore scraper ──
+      - name: Update WTA data from Flashscore
+        run: |
+          echo "=== Scraping WTA results from Flashscore ==="
+          python -c "
+          import json
+          from src.data_updater import scrape_flashscore_results
+          result = scrape_flashscore_results()
+          print(json.dumps(result, indent=2, default=str))
+          "
+        env:
+          CHROME_BIN: ${{ steps.setup-chrome.outputs.chrome-path }}
+          CHROMEDRIVER_PATH: ${{ steps.setup-chrome.outputs.chromedriver-path }}
+          PYTHONPATH: ${{ github.workspace }}
+
+      # ── Step 3: Also try Sackmann git pull (may succeed for WTA future) ──
+      - name: Try Sackmann repo update (WTA)
+        run: |
+          echo "=== Attempting Sackmann WTA update ==="
+          python -c "
+          import json
+          from src.data_updater import update_data_sources
+          result = update_data_sources()
+          print(json.dumps(result, indent=2, default=str))
+          "
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        continue-on-error: true
+
+      # ── Step 4: Rebuild data pipeline ──
+      - name: Rebuild data pipeline
+        run: |
+          echo "=== Running data pipeline ==="
+          python -c "
+          import json
+          from src.data_pipeline import run_pipeline
+          result = run_pipeline(incremental=True)
+          print(json.dumps(result, indent=2, default=str))
+          "
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      # ── Step 5: Commit and push updated data files ──
+      - name: Commit and push data updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage data files only (not code)
+          git add data/raw/tennis_atp/atp_matches_2025.csv || true
+          git add data/raw/tennis_atp/atp_matches_2026.csv || true
+          git add data/custom/ || true
+          git add data/processed/ || true
+          git add data/meta/tml_id_cache.json || true
+          git add data/meta/last_update.json || true
+
+          # Check if there are changes to commit
+          if git diff --cached --quiet; then
+            echo "No data changes to commit"
+          else
+            MATCH_COUNT_ATP=$(wc -l < data/raw/tennis_atp/atp_matches_2025.csv 2>/dev/null || echo "0")
+            git commit -m "data: daily update $(date -u +%Y-%m-%d) [ATP: ${MATCH_COUNT_ATP} rows]"
+            git push
+            echo "Data committed and pushed"
+          fi
+
+      # ── Step 6: Upload artifacts for debugging ──
+      - name: Upload data artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: data-update-${{ github.run_number }}
+          path: |
+            data/raw/tennis_atp/atp_matches_2025.csv
+            data/raw/tennis_atp/atp_matches_2026.csv
+            data/custom/
+            data/processed/
+            data/meta/last_update.json
+            data/meta/tml_id_cache.json
+          retention-days: 7

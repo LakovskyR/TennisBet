@@ -1,4 +1,4 @@
-﻿python-dateutil==2.9.0.post0
+python-dateutil==2.9.0.post0
 streamlit==1.53.1
 catboost==1.2.10
 xgboost==3.2.0
@@ -11,3 +11,4 @@ fuzzywuzzy==0.18.0
 python-Levenshtein==0.27.1
 plotly==6.6.0
 requests==2.32.5
+rapidfuzz>=3.0.0

@@ -11,13 +11,27 @@ data/meta/bankroll_log.json
 data/meta/prediction_log.csv
 data/meta/daily_report_latest.html
 data/processed/*_predictions.csv
-catboost_info/
+# Model artifacts
+models/*.cbm
+models/*.json
+models/*.csv
 
 node_modules/
+archive/
+catboost_info/
+db/
 
 GMAIL_secrets.txt
 gmail_secrets.txt
 openrouter_api.txt
 api.txt
+rtvt.ai.txt
+
+models/*.pkl
+models/*.txt
+data/odds/odds_movement.csv
+data/meta/tml_id_cache.json
+data/processed/performance_report.html
+.claude/
 
 .streamlit/secrets.toml

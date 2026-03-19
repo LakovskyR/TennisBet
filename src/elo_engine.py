@@ -17,6 +17,7 @@ from config import (
     SURFACE_LIST,
     TOURNAMENT_WEIGHTS,
 )
+from src.sqlite_storage import load_matches_frame, sync_elo_ratings
 
 ROUND_MULTIPLIER = {
     "R128": 0.95,
@@ -48,16 +49,31 @@ def _k_factor(tourney_level: str | None, round_name: str | None, best_of: Any) -
 
 
 def _load_matches(tour: str) -> pd.DataFrame:
-    path = PROCESSED_DIR / f"{tour}_matches_master.csv"
-    if not path.exists():
-        raise FileNotFoundError(f"Missing master file for {tour}: {path}")
-
-    df = pd.read_csv(path, low_memory=False)
+    df = load_matches_frame(
+        tour,
+        columns=[
+            "match_key",
+            "tourney_id",
+            "tourney_name",
+            "surface",
+            "tourney_level",
+            "round",
+            "best_of",
+            "winner_id",
+            "winner_name",
+            "loser_id",
+            "loser_name",
+            "match_date",
+            "match_num",
+            "is_training_eligible",
+        ],
+        fallback_to_csv=False,
+    )
     if df.empty:
         return df
 
     if "match_date" not in df.columns:
-        raise KeyError(f"Missing match_date in {path}")
+        raise KeyError(f"Missing match_date for {tour} match history")
 
     df["match_date"] = pd.to_datetime(df["match_date"], errors="coerce")
     df = df[df["match_date"].notna()].copy()
@@ -255,7 +271,9 @@ def compute_elo_for_tour(tour: str, incremental: bool = True) -> dict[str, Any]:
             )
 
     snapshot_path = PROCESSED_DIR / f"{tour}_elo_snapshot.csv"
-    pd.DataFrame(snapshot_rows).to_csv(snapshot_path, index=False)
+    snapshot_df = pd.DataFrame(snapshot_rows)
+    snapshot_df.to_csv(snapshot_path, index=False)
+    sync_elo_ratings(combined, tour=tour, snapshot_df=snapshot_df)
 
     return {
         "tour": tour,

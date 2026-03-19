@@ -1,17 +1,32 @@
 ﻿from __future__ import annotations
 
 import argparse
+from functools import lru_cache
 import json
 import logging
+import pickle
 import re
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from config import MODELS_DIR, ODDS_UPCOMING_FILE, PROCESSED_DIR, RAW_ATP, RAW_WTA
+from config import (
+    CATBOOST_WEIGHT,
+    CATBOOST_WEIGHT_WTA,
+    MODELS_DIR,
+    ODDS_UPCOMING_FILE,
+    PROCESSED_DIR,
+    RAW_ATP,
+    RAW_WTA,
+    XGBOOST_WEIGHT,
+    XGBOOST_WEIGHT_WTA,
+)
 from src.player_aliases import canonicalize_player_name, load_player_aliases, normalize_player_name
+from src.sqlite_storage import load_matches_frame, load_odds_frame
 
 try:
     from catboost import CatBoostClassifier
@@ -23,13 +38,84 @@ try:
 except Exception:  # pragma: no cover
     XGBClassifier = None
 
+try:
+    from lightgbm import Booster as LGBMBooster
+except Exception:  # pragma: no cover
+    LGBMBooster = None
+
 
 logger = logging.getLogger("predictor")
+DEFAULT_ENSEMBLE_CONFIG = {
+    "winner": "cat60_xgb40",
+    "weights": {"catboost": 3 / 5, "xgboost": 2 / 5},
+}
 
 
 def _safe_json_load(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8-sig")
     return json.loads(text) if text.strip() else {}
+
+
+@lru_cache(maxsize=2)
+def _load_uncertainty_config(tour: str) -> dict[str, Any]:
+    path = MODELS_DIR / f"uncertainty_{tour}.json"
+    if not path.exists():
+        return {}
+    try:
+        return _safe_json_load(path)
+    except Exception:
+        return {}
+
+
+def _model_artifact_path(tour: str, model_name: str) -> Path:
+    suffixes = {
+        "catboost": f"catboost_{tour}.cbm",
+        "xgboost": f"xgboost_{tour}.json",
+        "lgbm": f"lgbm_{tour}.txt",
+        "rf": f"rf_{tour}.pkl",
+        "elasticnet": f"elasticnet_{tour}.pkl",
+        "logreg": f"logreg_{tour}.pkl",
+    }
+    return MODELS_DIR / suffixes[model_name]
+
+
+def _tour_cat_xgb_weights(tour: str) -> dict[str, float]:
+    if str(tour).lower() == "wta":
+        return {"catboost": float(CATBOOST_WEIGHT_WTA), "xgboost": float(XGBOOST_WEIGHT_WTA)}
+    return {"catboost": float(CATBOOST_WEIGHT), "xgboost": float(XGBOOST_WEIGHT)}
+
+
+def _default_ensemble_config(tour: str) -> dict[str, Any]:
+    weights = _tour_cat_xgb_weights(tour)
+    cat_pct = int(round(weights["catboost"] * 100))
+    xgb_pct = int(round(weights["xgboost"] * 100))
+    return {
+        "winner": f"cat{cat_pct}_xgb{xgb_pct}",
+        "weights": weights,
+    }
+
+
+def _apply_tour_specific_default_blend(tour: str, payload: dict[str, Any]) -> dict[str, Any]:
+    weights = payload.get("weights")
+    if not isinstance(weights, dict) or set(weights.keys()) != {"catboost", "xgboost"}:
+        return payload
+    winner = str(payload.get("winner", ""))
+    if not (winner.startswith("cat") and "xgb" in winner):
+        return payload
+    payload = dict(payload)
+    payload["weights"] = _tour_cat_xgb_weights(tour)
+    return payload
+
+
+def _load_ensemble_config(tour: str) -> dict[str, Any]:
+    path = MODELS_DIR / f"ensemble_config_{tour}.json"
+    if not path.exists():
+        return _default_ensemble_config(tour)
+    payload = _safe_json_load(path)
+    weights = payload.get("weights")
+    if not isinstance(weights, dict) or not weights:
+        return _default_ensemble_config(tour)
+    return _apply_tour_specific_default_blend(tour, payload)
 
 
 def _sanitize_columns(cols: list[str]) -> list[str]:
@@ -48,27 +134,77 @@ def _sanitize_columns(cols: list[str]) -> list[str]:
     return out
 
 
-def _load_models_and_schema(tour: str) -> tuple[Any, Any, dict[str, Any]]:
-    if CatBoostClassifier is None or XGBClassifier is None:
-        raise RuntimeError("catboost/xgboost not installed")
+def _load_single_model(model_name: str, path: Path) -> Any | None:
+    if not path.exists():
+        logger.warning("Missing %s artifact: %s", model_name, path)
+        return None
+    if model_name == "catboost":
+        if CatBoostClassifier is None:
+            logger.warning("CatBoost not installed; skipping catboost")
+            return None
+        model = CatBoostClassifier()
+        model.load_model(str(path))
+        return model
+    if model_name == "xgboost":
+        if XGBClassifier is None:
+            logger.warning("XGBoost not installed; skipping xgboost")
+            return None
+        model = XGBClassifier()
+        model.load_model(str(path))
+        return model
+    if model_name == "lgbm":
+        if LGBMBooster is None:
+            logger.warning("LightGBM not installed; skipping lgbm")
+            return None
+        with tempfile.NamedTemporaryFile(prefix="tennisbet_lgbm_", suffix=".txt", delete=False) as handle:
+            temp_path = Path(handle.name)
+        try:
+            shutil.copyfile(path, temp_path)
+            return LGBMBooster(model_file=str(temp_path))
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+    with path.open("rb") as handle:
+        return pickle.load(handle)
 
-    cat_path = MODELS_DIR / f"catboost_{tour}.cbm"
-    xgb_path = MODELS_DIR / f"xgboost_{tour}.json"
+
+def _normalize_weights(weights: dict[str, float]) -> dict[str, float]:
+    total = float(sum(float(v) for v in weights.values()))
+    if total <= 0:
+        return {}
+    return {name: float(value) / total for name, value in weights.items()}
+
+
+def _load_models_and_schema(tour: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     prep_path = MODELS_DIR / f"preprocess_{tour}.json"
+    if not prep_path.exists():
+        raise FileNotFoundError(f"Missing preprocess artifact for {tour}: {prep_path.name}.")
 
-    if not cat_path.exists() or not xgb_path.exists() or not prep_path.exists():
-        raise FileNotFoundError(
-            f"Missing model artifacts for {tour}. Expected {cat_path.name}, {xgb_path.name}, {prep_path.name}."
-        )
+    ensemble_config = _load_ensemble_config(tour)
+    weights = dict(ensemble_config.get("weights", {}))
+    models: dict[str, Any] = {}
+    for model_name in list(weights.keys()):
+        model = _load_single_model(model_name, _model_artifact_path(tour, model_name))
+        if model is None:
+            continue
+        models[model_name] = model
 
-    cat_model = CatBoostClassifier()
-    cat_model.load_model(str(cat_path))
+    if not models and ensemble_config.get("winner") != DEFAULT_ENSEMBLE_CONFIG["winner"]:
+        ensemble_config = _default_ensemble_config(tour)
+        for model_name in list(ensemble_config["weights"].keys()):
+            model = _load_single_model(model_name, _model_artifact_path(tour, model_name))
+            if model is not None:
+                models[model_name] = model
 
-    xgb_model = XGBClassifier()
-    xgb_model.load_model(str(xgb_path))
+    if not models:
+        raise FileNotFoundError(f"No loadable model artifacts found for {tour}.")
 
     schema = _safe_json_load(prep_path)
-    return cat_model, xgb_model, schema
+    resolved_weights = _normalize_weights({name: float(weights.get(name, ensemble_config["weights"].get(name, 0.0))) for name in models})
+    if not resolved_weights:
+        resolved_weights = _normalize_weights({name: float(weight) for name, weight in ensemble_config["weights"].items() if name in models})
+    ensemble_config["weights"] = resolved_weights
+    return models, ensemble_config, schema
 
 
 def _prepare_for_models(df: pd.DataFrame, schema: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -105,25 +241,51 @@ def _prepare_for_models(df: pd.DataFrame, schema: dict[str, Any]) -> tuple[pd.Da
     return x, xgb
 
 
+def _predict_model_proba(model_name: str, model: Any, x_cat: pd.DataFrame, x_tab: pd.DataFrame) -> np.ndarray:
+    if model_name == "catboost":
+        return model.predict_proba(x_cat)[:, 1]
+    if model_name == "lgbm":
+        preds = model.predict(x_tab)
+        return np.asarray(preds, dtype=float)
+    return model.predict_proba(x_tab)[:, 1]
+
+
 def add_prediction_columns(df: pd.DataFrame, tour: str) -> pd.DataFrame:
-    cat_model, xgb_model, schema = _load_models_and_schema(tour)
+    models, ensemble_config, schema = _load_models_and_schema(tour)
     x_cat, x_xgb = _prepare_for_models(df, schema)
 
-    cat_probs = cat_model.predict_proba(x_cat)[:, 1]
-    xgb_probs = xgb_model.predict_proba(x_xgb)[:, 1]
-
-    agreement = np.abs(cat_probs - xgb_probs)
+    probability_map = {
+        model_name: _predict_model_proba(model_name, model, x_cat, x_xgb)
+        for model_name, model in models.items()
+    }
+    stacked = np.vstack([np.asarray(values, dtype=float) for values in probability_map.values()])
+    if stacked.shape[0] == 1:
+        agreement_gap = np.zeros(stacked.shape[1], dtype=float)
+    else:
+        agreement_gap = stacked.max(axis=0) - stacked.min(axis=0)
     confidence = np.where(
-        agreement < 0.05,
+        agreement_gap < 0.05,
         "HIGH",
-        np.where(agreement < 0.12, "MEDIUM", "LOW"),
+        np.where(agreement_gap < 0.12, "MEDIUM", "LOW"),
     )
+    ensemble_prob = np.zeros(stacked.shape[1], dtype=float)
+    for model_name, weight in ensemble_config.get("weights", {}).items():
+        probs = probability_map.get(model_name)
+        if probs is not None:
+            ensemble_prob += float(weight) * probs
+    uncertainty = _load_uncertainty_config(tour)
+    interval_radius = float(uncertainty.get("residual_quantile", 0.0) or 0.0)
+    interval_lower = np.clip(ensemble_prob - interval_radius, 0.0, 1.0)
+    interval_upper = np.clip(ensemble_prob + interval_radius, 0.0, 1.0)
 
     out = df.copy()
-    out["catboost_prob"] = cat_probs
-    out["xgboost_prob"] = xgb_probs
-    out["ensemble_prob_p1"] = 0.6 * cat_probs + 0.4 * xgb_probs
-    out["model_agreement"] = 1.0 - agreement
+    for model_name in ["catboost", "xgboost", "lgbm", "rf", "elasticnet", "logreg"]:
+        out[f"{model_name}_prob"] = probability_map.get(model_name, np.nan)
+    out["ensemble_prob_p1"] = ensemble_prob
+    out["ensemble_prob_p1_lower"] = interval_lower
+    out["ensemble_prob_p1_upper"] = interval_upper
+    out["ensemble_prob_p1_width"] = interval_upper - interval_lower
+    out["model_agreement"] = 1.0 - agreement_gap
     out["confidence_tier"] = confidence
 
     return out
@@ -213,9 +375,23 @@ def _build_player_states(feature_df: pd.DataFrame) -> dict[str, dict[str, Any]]:
     return state
 
 
+@lru_cache(maxsize=2)
+def _load_h2h_match_history(tour: str) -> pd.DataFrame:
+    df = load_matches_frame(
+        tour,
+        columns=["match_date", "winner_id", "loser_id", "surface"],
+        fallback_to_csv=False,
+    )
+    if df.empty:
+        return df
+    df = df.copy()
+    df["match_date"] = pd.to_datetime(df["match_date"], errors="coerce")
+    return df[df["match_date"].notna()].copy()
+
+
 def _h2h_stats(tour: str, p1_id: str, p2_id: str, surface: str, before_date: pd.Timestamp) -> dict[str, float]:
-    master_path = PROCESSED_DIR / f"{tour}_matches_master.csv"
-    if not master_path.exists():
+    m = _load_h2h_match_history(tour)
+    if m.empty:
         return {
             "h2h_p1_wins": 0,
             "h2h_p2_wins": 0,
@@ -224,10 +400,7 @@ def _h2h_stats(tour: str, p1_id: str, p2_id: str, surface: str, before_date: pd.
             "h2h_surface_p1_wins": 0,
             "h2h_surface_p2_wins": 0,
         }
-    usecols = ["match_date", "winner_id", "loser_id", "surface"]
-    m = pd.read_csv(master_path, usecols=usecols, low_memory=False)
-    m["match_date"] = pd.to_datetime(m["match_date"], errors="coerce")
-    m = m[m["match_date"].notna() & (m["match_date"] < before_date)]
+    m = m[m["match_date"] < before_date]
     w = m["winner_id"].astype("string")
     l = m["loser_id"].astype("string")
     mask = ((w == p1_id) & (l == p2_id)) | ((w == p2_id) & (l == p1_id))
@@ -262,10 +435,12 @@ def predict_from_odds(
     odds_path: Path = ODDS_UPCOMING_FILE,
     output_path: Path | None = None,
 ) -> pd.DataFrame:
-    if not odds_path.exists() or odds_path.stat().st_size == 0:
-        return pd.DataFrame()
-
-    odds = pd.read_csv(odds_path, low_memory=False)
+    if odds_path == ODDS_UPCOMING_FILE:
+        odds = load_odds_frame(current_only=True, fallback_to_csv=False)
+    else:
+        if not odds_path.exists() or odds_path.stat().st_size == 0:
+            return pd.DataFrame()
+        odds = pd.read_csv(odds_path, low_memory=False)
     odds = odds[odds.get("tour", pd.Series(dtype=str)).astype("string").str.lower() == tour].copy()
     if odds.empty:
         return pd.DataFrame()
@@ -428,8 +603,15 @@ def predict_from_odds(
         "p1_name",
         "p2_name",
         "ensemble_prob_p1",
+        "ensemble_prob_p1_lower",
+        "ensemble_prob_p1_upper",
+        "ensemble_prob_p1_width",
         "catboost_prob",
         "xgboost_prob",
+        "lgbm_prob",
+        "rf_prob",
+        "elasticnet_prob",
+        "logreg_prob",
         "confidence_tier",
         "model_agreement",
     ]
@@ -455,8 +637,15 @@ def predict_from_feature_file(tour: str, input_path: Path, output_path: Path | N
         "p1_name",
         "p2_name",
         "ensemble_prob_p1",
+        "ensemble_prob_p1_lower",
+        "ensemble_prob_p1_upper",
+        "ensemble_prob_p1_width",
         "catboost_prob",
         "xgboost_prob",
+        "lgbm_prob",
+        "rf_prob",
+        "elasticnet_prob",
+        "logreg_prob",
         "confidence_tier",
         "model_agreement",
     ]

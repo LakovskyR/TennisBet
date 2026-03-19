@@ -33,6 +33,18 @@ from src.data_updater import get_staleness_status, update_data_sources
 from src.elo_engine import run_elo
 from src.odds_scraper import refresh_odds
 from src.predictor import predict_from_feature_file, predict_from_odds
+from src.sqlite_storage import (
+    count_matches,
+    initialize_database,
+    load_bankroll_state_payload,
+    load_odds_frame,
+    load_prediction_log_frame,
+    sync_bankroll_state,
+    sync_odds_frame,
+    sync_player_aliases,
+    sync_prediction_log_frame,
+    sync_reference_players,
+)
 from src.value_engine import generate_recommendations
 
 CUSTOM_SCHEMA = [
@@ -91,6 +103,9 @@ ODDS_UPLOAD_COLUMNS = [
     "player_2_match_score",
     "odds_p1",
     "odds_p2",
+    "bookmaker",
+    "bookmaker_count",
+    "aggregation_method",
     "source_url",
     "match_id",
     "captured_at",
@@ -109,11 +124,14 @@ def _ensure_file(path: Path, columns: list[str] | None = None) -> None:
 
 
 def _bootstrap_files() -> None:
+    initialize_database()
     _ensure_file(CUSTOM_ATP_FILE, CUSTOM_SCHEMA)
     _ensure_file(CUSTOM_WTA_FILE, CUSTOM_SCHEMA)
     _ensure_file(PREDICTION_LOG_FILE, PREDICTION_LOG_COLUMNS)
     _ensure_file(ODDS_UPCOMING_FILE, ODDS_UPLOAD_COLUMNS)
     _ensure_file(ODDS_HISTORY_FILE, ODDS_UPLOAD_COLUMNS)
+    sync_reference_players()
+    sync_player_aliases()
 
     if not LAST_UPDATE_FILE.exists():
         LAST_UPDATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -141,6 +159,11 @@ def _bootstrap_files() -> None:
             ),
             encoding="utf-8",
         )
+
+    sync_prediction_log_frame(_safe_read_csv(PREDICTION_LOG_FILE, PREDICTION_LOG_COLUMNS))
+    sync_odds_frame(_safe_read_csv(ODDS_HISTORY_FILE, ODDS_UPLOAD_COLUMNS), mark_current_upcoming=False, source_name="odds_history")
+    sync_odds_frame(_safe_read_csv(ODDS_UPCOMING_FILE, ODDS_UPLOAD_COLUMNS), mark_current_upcoming=True, source_name="odds_upcoming")
+    sync_bankroll_state(_load_bankroll_state())
 
 
 def _safe_read_csv(path: Path, columns: list[str] | None = None) -> pd.DataFrame:
@@ -248,14 +271,7 @@ def _known_player_ids(tour: str) -> set[str]:
 
 
 def _load_bankroll_state() -> dict[str, Any]:
-    if not BANKROLL_LOG_FILE.exists():
-        return {"capital": float(DEFAULT_CAPITAL), "updated_at": None, "history": []}
-    try:
-        text = BANKROLL_LOG_FILE.read_text(encoding="utf-8-sig")
-        state = json.loads(text) if text.strip() else {}
-    except Exception:
-        state = {}
-
+    state = load_bankroll_state_payload(fallback_to_file=False)
     if "capital" not in state:
         state["capital"] = float(DEFAULT_CAPITAL)
     if "history" not in state or not isinstance(state["history"], list):
@@ -266,6 +282,7 @@ def _load_bankroll_state() -> dict[str, Any]:
 def _save_bankroll_state(state: dict[str, Any]) -> None:
     BANKROLL_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     BANKROLL_LOG_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    sync_bankroll_state(state)
 
 
 def _apply_bankroll_update(pnl: float, prediction_id: str, note: str) -> dict[str, Any]:
@@ -294,7 +311,11 @@ def _apply_bankroll_update(pnl: float, prediction_id: str, note: str) -> dict[st
 
 
 def _load_prediction_log() -> pd.DataFrame:
-    return _safe_read_csv(PREDICTION_LOG_FILE, PREDICTION_LOG_COLUMNS)
+    df = load_prediction_log_frame(fallback_to_csv=False)
+    for col in PREDICTION_LOG_COLUMNS:
+        if col not in df.columns:
+            df[col] = pd.NA
+    return df[PREDICTION_LOG_COLUMNS]
 
 
 def _save_prediction_log(df: pd.DataFrame) -> None:
@@ -303,6 +324,7 @@ def _save_prediction_log(df: pd.DataFrame) -> None:
         if col not in df.columns:
             df[col] = pd.NA
     df[PREDICTION_LOG_COLUMNS].to_csv(PREDICTION_LOG_FILE, index=False)
+    sync_prediction_log_frame(df[PREDICTION_LOG_COLUMNS].copy())
 
 
 def _prediction_id(row: pd.Series | dict[str, Any], tour: str) -> str:
@@ -436,6 +458,7 @@ def _ingest_uploaded_odds_csv(uploaded_file: Any, default_tour: str | None) -> t
     history = _safe_read_csv(ODDS_HISTORY_FILE, ODDS_UPLOAD_COLUMNS)
     prepared.to_csv(ODDS_UPCOMING_FILE, index=False)
     pd.concat([history, prepared], ignore_index=True).to_csv(ODDS_HISTORY_FILE, index=False)
+    sync_odds_frame(prepared, mark_current_upcoming=True, source_name="odds_upcoming")
     return True, f"Imported {len(prepared)} odds row(s) into {ODDS_UPCOMING_FILE.name}."
 
 
@@ -457,8 +480,7 @@ def _run_data_refresh() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]
 
 
 def _count_matches(tour: str) -> int:
-    path = PROCESSED_DIR / f"{tour}_matches_master.csv"
-    return len(_safe_read_csv(path))
+    return count_matches(tour=tour, fallback_to_csv=False)
 
 
 def _count_custom_matches(tour: str) -> int:
@@ -528,17 +550,9 @@ def _load_feature_importance(tour: str) -> pd.DataFrame:
 
 
 def _odds_snapshot_status() -> dict[str, Any]:
-    if not ODDS_UPCOMING_FILE.exists() or ODDS_UPCOMING_FILE.stat().st_size == 0:
-        return {"status": "missing", "message": "No upcoming odds snapshot file."}
-    try:
-        odds = pd.read_csv(ODDS_UPCOMING_FILE, low_memory=False)
-    except Exception as exc:
-        return {"status": "error", "message": f"Failed to read odds snapshot: {exc}"}
+    odds = load_odds_frame(current_only=True, fallback_to_csv=False)
     if odds.empty:
-        return {"status": "empty", "message": "Upcoming odds snapshot is empty."}
-
-    if "captured_at" not in odds.columns:
-        return {"status": "unknown", "message": "Odds snapshot has no captured_at timestamp."}
+        return {"status": "missing", "message": "No upcoming odds snapshot available."}
 
     ts = pd.to_datetime(odds["captured_at"], utc=True, errors="coerce").dropna()
     if ts.empty:

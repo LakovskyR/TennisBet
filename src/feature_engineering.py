@@ -18,11 +18,16 @@ from config import (
     RAW_ATP,
     RAW_WTA,
 )
+from src.sqlite_storage import load_matches_frame, sync_features_frame
 
 DEFAULT_WIN_PCT = 0.5
 DEFAULT_HOME_WIN_PCT = 0.5
 DEFAULT_ACE_PCT = 0.06
 DEFAULT_FIRST_SERVE_PCT = 0.62
+DEFAULT_FIRST_SERVE_WIN_PCT = 0.68
+DEFAULT_SECOND_SERVE_WIN_PCT = 0.50
+DEFAULT_SERVICE_POINTS_WON_PCT = 0.62
+DEFAULT_RETURN_POINTS_WON_PCT = 0.38
 DEFAULT_BP_SAVE_PCT = 0.60
 DEFAULT_DAYS_SINCE_LAST = 14
 
@@ -140,8 +145,19 @@ def _new_player_state() -> dict[str, Any]:
         "match_dates": deque(),
         "sets_last_window": deque(),
         "ace_pct": deque(maxlen=20),
+        "ace_pct_surface": defaultdict(lambda: deque(maxlen=20)),
         "first_serve_pct": deque(maxlen=20),
+        "first_serve_pct_surface": defaultdict(lambda: deque(maxlen=20)),
+        "first_serve_win_pct": deque(maxlen=20),
+        "first_serve_win_pct_surface": defaultdict(lambda: deque(maxlen=20)),
+        "second_serve_win_pct": deque(maxlen=20),
+        "second_serve_win_pct_surface": defaultdict(lambda: deque(maxlen=20)),
+        "service_points_won_pct": deque(maxlen=20),
+        "service_points_won_pct_surface": defaultdict(lambda: deque(maxlen=20)),
+        "return_points_won_pct": deque(maxlen=20),
+        "return_points_won_pct_surface": defaultdict(lambda: deque(maxlen=20)),
         "bp_save_pct": deque(maxlen=20),
+        "bp_save_pct_surface": defaultdict(lambda: deque(maxlen=20)),
         "home_wins": 0,
         "home_matches": 0,
         "title_dates": deque(),
@@ -207,7 +223,7 @@ def _load_elo_pre_map(path: Path) -> dict[tuple[str, str], tuple[float, float]]:
     return mapping
 
 
-def _prepare_matches(path: Path) -> pd.DataFrame:
+def _prepare_matches(tour: str) -> pd.DataFrame:
     keep_cols = [
         "match_key",
         "match_date",
@@ -232,17 +248,21 @@ def _prepare_matches(path: Path) -> pd.DataFrame:
         "w_ace",
         "w_svpt",
         "w_1stIn",
+        "w_1stWon",
+        "w_2ndWon",
         "w_bpSaved",
         "w_bpFaced",
         "l_ace",
         "l_svpt",
         "l_1stIn",
+        "l_1stWon",
+        "l_2ndWon",
         "l_bpSaved",
         "l_bpFaced",
         "is_training_eligible",
     ]
 
-    df = pd.read_csv(path, usecols=lambda c: c in keep_cols, low_memory=False)
+    df = load_matches_frame(tour, columns=keep_cols, fallback_to_csv=False)
 
     for col in keep_cols:
         if col not in df.columns:
@@ -263,28 +283,60 @@ def _compute_metric_ratios(
     ace: Any,
     svpt: Any,
     first_in: Any,
+    first_won: Any,
+    second_won: Any,
     bp_saved: Any,
     bp_faced: Any,
-) -> tuple[float | None, float | None, float | None]:
-    ace_pct = None
-    first_serve_pct = None
-    bp_save_pct = None
+    opp_svpt: Any,
+    opp_first_won: Any,
+    opp_second_won: Any,
+) -> dict[str, float | None]:
+    metrics = {
+        "ace_pct": None,
+        "first_serve_pct": None,
+        "first_serve_win_pct": None,
+        "second_serve_win_pct": None,
+        "service_points_won_pct": None,
+        "return_points_won_pct": None,
+        "bp_save_pct": None,
+    }
 
     svpt_v = _to_float(svpt)
     if svpt_v and svpt_v > 0:
         ace_v = _to_float(ace)
         first_in_v = _to_float(first_in)
+        first_won_v = _to_float(first_won)
+        second_won_v = _to_float(second_won)
         if ace_v is not None:
-            ace_pct = ace_v / svpt_v
+            metrics["ace_pct"] = ace_v / svpt_v
         if first_in_v is not None:
-            first_serve_pct = first_in_v / svpt_v
+            metrics["first_serve_pct"] = first_in_v / svpt_v
+        if first_in_v and first_in_v > 0 and first_won_v is not None:
+            metrics["first_serve_win_pct"] = first_won_v / first_in_v
+        if first_in_v is not None:
+            second_serve_points = svpt_v - first_in_v
+            if second_serve_points > 0 and second_won_v is not None:
+                metrics["second_serve_win_pct"] = second_won_v / second_serve_points
+        if first_won_v is not None and second_won_v is not None:
+            metrics["service_points_won_pct"] = (first_won_v + second_won_v) / svpt_v
 
     bp_faced_v = _to_float(bp_faced)
     bp_saved_v = _to_float(bp_saved)
     if bp_faced_v and bp_faced_v > 0 and bp_saved_v is not None:
-        bp_save_pct = bp_saved_v / bp_faced_v
+        metrics["bp_save_pct"] = bp_saved_v / bp_faced_v
 
-    return ace_pct, first_serve_pct, bp_save_pct
+    opp_svpt_v = _to_float(opp_svpt)
+    opp_first_won_v = _to_float(opp_first_won)
+    opp_second_won_v = _to_float(opp_second_won)
+    if (
+        opp_svpt_v
+        and opp_svpt_v > 0
+        and opp_first_won_v is not None
+        and opp_second_won_v is not None
+    ):
+        metrics["return_points_won_pct"] = 1.0 - ((opp_first_won_v + opp_second_won_v) / opp_svpt_v)
+
+    return metrics
 
 
 def _build_features_for_tour(
@@ -292,7 +344,7 @@ def _build_features_for_tour(
     tournament_country_path: Path,
 ) -> dict[str, Any]:
     files = TOUR_FILES[tour]
-    matches = _prepare_matches(files["matches"])
+    matches = _prepare_matches(tour)
     elo_map = _load_elo_pre_map(files["elo"])
 
     tournament_country_exact, tournament_country_norm = _load_tournament_country_map(tournament_country_path)
@@ -330,11 +382,15 @@ def _build_features_for_tour(
         "w_ace",
         "w_svpt",
         "w_1stIn",
+        "w_1stWon",
+        "w_2ndWon",
         "w_bpSaved",
         "w_bpFaced",
         "l_ace",
         "l_svpt",
         "l_1stIn",
+        "l_1stWon",
+        "l_2ndWon",
         "l_bpSaved",
         "l_bpFaced",
     ]
@@ -363,11 +419,15 @@ def _build_features_for_tour(
             w_ace,
             w_svpt,
             w_1st_in,
+            w_1st_won,
+            w_2nd_won,
             w_bp_saved,
             w_bp_faced,
             l_ace,
             l_svpt,
             l_1st_in,
+            l_1st_won,
+            l_2nd_won,
             l_bp_saved,
             l_bp_faced,
         ) = record
@@ -546,6 +606,28 @@ def _build_features_for_tour(
             "p2_1st_serve_pct": _series_mean(p2_state["first_serve_pct"], DEFAULT_FIRST_SERVE_PCT),
             "p1_bp_save_pct": _series_mean(p1_state["bp_save_pct"], DEFAULT_BP_SAVE_PCT),
             "p2_bp_save_pct": _series_mean(p2_state["bp_save_pct"], DEFAULT_BP_SAVE_PCT),
+            "p1_1st_serve_win_pct": _series_mean(p1_state["first_serve_win_pct"], DEFAULT_FIRST_SERVE_WIN_PCT),
+            "p2_1st_serve_win_pct": _series_mean(p2_state["first_serve_win_pct"], DEFAULT_FIRST_SERVE_WIN_PCT),
+            "p1_2nd_serve_win_pct": _series_mean(p1_state["second_serve_win_pct"], DEFAULT_SECOND_SERVE_WIN_PCT),
+            "p2_2nd_serve_win_pct": _series_mean(p2_state["second_serve_win_pct"], DEFAULT_SECOND_SERVE_WIN_PCT),
+            "p1_service_points_won_pct": _series_mean(p1_state["service_points_won_pct"], DEFAULT_SERVICE_POINTS_WON_PCT),
+            "p2_service_points_won_pct": _series_mean(p2_state["service_points_won_pct"], DEFAULT_SERVICE_POINTS_WON_PCT),
+            "p1_return_points_won_pct": _series_mean(p1_state["return_points_won_pct"], DEFAULT_RETURN_POINTS_WON_PCT),
+            "p2_return_points_won_pct": _series_mean(p2_state["return_points_won_pct"], DEFAULT_RETURN_POINTS_WON_PCT),
+            "p1_ace_pct_surface": _series_mean(p1_state["ace_pct_surface"][surface_name], DEFAULT_ACE_PCT),
+            "p2_ace_pct_surface": _series_mean(p2_state["ace_pct_surface"][surface_name], DEFAULT_ACE_PCT),
+            "p1_1st_serve_pct_surface": _series_mean(p1_state["first_serve_pct_surface"][surface_name], DEFAULT_FIRST_SERVE_PCT),
+            "p2_1st_serve_pct_surface": _series_mean(p2_state["first_serve_pct_surface"][surface_name], DEFAULT_FIRST_SERVE_PCT),
+            "p1_1st_serve_win_pct_surface": _series_mean(p1_state["first_serve_win_pct_surface"][surface_name], DEFAULT_FIRST_SERVE_WIN_PCT),
+            "p2_1st_serve_win_pct_surface": _series_mean(p2_state["first_serve_win_pct_surface"][surface_name], DEFAULT_FIRST_SERVE_WIN_PCT),
+            "p1_2nd_serve_win_pct_surface": _series_mean(p1_state["second_serve_win_pct_surface"][surface_name], DEFAULT_SECOND_SERVE_WIN_PCT),
+            "p2_2nd_serve_win_pct_surface": _series_mean(p2_state["second_serve_win_pct_surface"][surface_name], DEFAULT_SECOND_SERVE_WIN_PCT),
+            "p1_service_points_won_pct_surface": _series_mean(p1_state["service_points_won_pct_surface"][surface_name], DEFAULT_SERVICE_POINTS_WON_PCT),
+            "p2_service_points_won_pct_surface": _series_mean(p2_state["service_points_won_pct_surface"][surface_name], DEFAULT_SERVICE_POINTS_WON_PCT),
+            "p1_return_points_won_pct_surface": _series_mean(p1_state["return_points_won_pct_surface"][surface_name], DEFAULT_RETURN_POINTS_WON_PCT),
+            "p2_return_points_won_pct_surface": _series_mean(p2_state["return_points_won_pct_surface"][surface_name], DEFAULT_RETURN_POINTS_WON_PCT),
+            "p1_bp_save_pct_surface": _series_mean(p1_state["bp_save_pct_surface"][surface_name], DEFAULT_BP_SAVE_PCT),
+            "p2_bp_save_pct_surface": _series_mean(p2_state["bp_save_pct_surface"][surface_name], DEFAULT_BP_SAVE_PCT),
             "surface": surface_name,
             "tournament_level": level_value,
             "round": round_value,
@@ -565,8 +647,30 @@ def _build_features_for_tour(
             if sets_total <= 0:
                 sets_total = 2 if best_of_value == "3" else 3
 
-        winner_serve = _compute_metric_ratios(w_ace, w_svpt, w_1st_in, w_bp_saved, w_bp_faced)
-        loser_serve = _compute_metric_ratios(l_ace, l_svpt, l_1st_in, l_bp_saved, l_bp_faced)
+        winner_serve = _compute_metric_ratios(
+            w_ace,
+            w_svpt,
+            w_1st_in,
+            w_1st_won,
+            w_2nd_won,
+            w_bp_saved,
+            w_bp_faced,
+            l_svpt,
+            l_1st_won,
+            l_2nd_won,
+        )
+        loser_serve = _compute_metric_ratios(
+            l_ace,
+            l_svpt,
+            l_1st_in,
+            l_1st_won,
+            l_2nd_won,
+            l_bp_saved,
+            l_bp_faced,
+            w_svpt,
+            w_1st_won,
+            w_2nd_won,
+        )
 
         winner_home = int(player_ioc.get(winner_id) is not None and tournament_country is not None and player_ioc[winner_id] == tournament_country)
         loser_home = int(player_ioc.get(loser_id) is not None and tournament_country is not None and player_ioc[loser_id] == tournament_country)
@@ -591,13 +695,30 @@ def _build_features_for_tour(
             st["match_dates"].append(match_date)
             st["sets_last_window"].append((match_date, sets_total))
 
-            ace_pct, first_serve_pct, bp_save_pct = serve_metrics
-            if ace_pct is not None:
-                st["ace_pct"].append(float(ace_pct))
-            if first_serve_pct is not None:
-                st["first_serve_pct"].append(float(first_serve_pct))
-            if bp_save_pct is not None:
-                st["bp_save_pct"].append(float(bp_save_pct))
+            for metric_name, metric_value in serve_metrics.items():
+                if metric_value is None:
+                    continue
+                if metric_name == "ace_pct":
+                    st["ace_pct"].append(float(metric_value))
+                    st["ace_pct_surface"][surface_name].append(float(metric_value))
+                elif metric_name == "first_serve_pct":
+                    st["first_serve_pct"].append(float(metric_value))
+                    st["first_serve_pct_surface"][surface_name].append(float(metric_value))
+                elif metric_name == "bp_save_pct":
+                    st["bp_save_pct"].append(float(metric_value))
+                    st["bp_save_pct_surface"][surface_name].append(float(metric_value))
+                elif metric_name == "first_serve_win_pct":
+                    st["first_serve_win_pct"].append(float(metric_value))
+                    st["first_serve_win_pct_surface"][surface_name].append(float(metric_value))
+                elif metric_name == "second_serve_win_pct":
+                    st["second_serve_win_pct"].append(float(metric_value))
+                    st["second_serve_win_pct_surface"][surface_name].append(float(metric_value))
+                elif metric_name == "service_points_won_pct":
+                    st["service_points_won_pct"].append(float(metric_value))
+                    st["service_points_won_pct_surface"][surface_name].append(float(metric_value))
+                elif metric_name == "return_points_won_pct":
+                    st["return_points_won_pct"].append(float(metric_value))
+                    st["return_points_won_pct_surface"][surface_name].append(float(metric_value))
 
             if is_home:
                 st["home_matches"] += 1
@@ -619,6 +740,7 @@ def _build_features_for_tour(
     output_file = files["output"]
     output_file.parent.mkdir(parents=True, exist_ok=True)
     features.to_csv(output_file, index=False)
+    sync_features_frame(features, tour=tour)
 
     win_pct_cols = [
         "p1_win_pct_5",

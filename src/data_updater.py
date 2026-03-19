@@ -1,11 +1,14 @@
 ﻿from __future__ import annotations
 
+import argparse
 import json
 import io
+import logging
 import os
 import random
 import re
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -15,6 +18,9 @@ from typing import Any
 import pandas as pd
 import requests
 from fuzzywuzzy import process
+
+if __package__ in {None, ""}:
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from config import (
     CUSTOM_ATP_FILE,
@@ -28,6 +34,7 @@ from config import (
     STALE_DAYS,
     WARNING_DAYS,
 )
+from src.sqlite_storage import latest_match_date
 
 RAW_REPOS = {
     "atp": RAW_ATP,
@@ -35,6 +42,8 @@ RAW_REPOS = {
 }
 
 FLASHSCORE_TENNIS_URL = "https://www.flashscore.com/tennis/"
+SACKMANN_BRANCHES = ("master", "main")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,6 +52,16 @@ class PullResult:
     method: str
     message: str
     rows_added: int = 0
+
+
+class SackmannYearUnavailableError(Exception):
+    def __init__(self, tour: str, year: int, urls: list[str]) -> None:
+        self.tour = tour
+        self.year = year
+        self.urls = urls
+        super().__init__(
+            f"WARNING: {year} Sackmann data not yet available (HTTP 404) — skipping"
+        )
 
 
 def _ensure_parent(path: Path) -> None:
@@ -107,21 +126,11 @@ def get_latest_match_date_from_raw(tour: str) -> date | None:
 
 
 def get_latest_match_date_from_processed() -> date | None:
-    dates: list[date] = []
-    for tour in ("atp", "wta"):
-        path = PROCESSED_DIR / f"{tour}_matches_master.csv"
-        if not path.exists():
-            continue
-        try:
-            df = pd.read_csv(path, usecols=["match_date"])
-        except Exception:
-            continue
-        if df.empty:
-            continue
-        parsed = pd.to_datetime(df["match_date"], errors="coerce").dropna()
-        if not parsed.empty:
-            dates.append(parsed.max().date())
-    return max(dates) if dates else None
+    latest = latest_match_date(fallback_to_csv=False)
+    if not latest:
+        return None
+    parsed = pd.to_datetime(latest, errors="coerce")
+    return parsed.date() if pd.notna(parsed) else None
 
 
 def pull_sackmann_repo(repo_path: Path) -> PullResult:
@@ -150,25 +159,75 @@ def pull_sackmann_repo(repo_path: Path) -> PullResult:
     return PullResult(False, "git", err)
 
 
-def _download_year_csv(tour: str, year: int) -> pd.DataFrame:
-    url = (
-        f"https://raw.githubusercontent.com/JeffSackmann/tennis_{tour}/"
-        f"master/{tour}_matches_{year}.csv"
+def _candidate_sackmann_urls(tour: str, year: int) -> list[str]:
+    return [
+        f"https://raw.githubusercontent.com/JeffSackmann/tennis_{tour}/{branch}/{tour}_matches_{year}.csv"
+        for branch in SACKMANN_BRANCHES
+    ]
+
+
+def _fetch_from_fallback_source(year: int, tour: str) -> pd.DataFrame:
+    """
+    TODO: wire to a real recent-match fallback source.
+
+    This exists so the updater can keep a clean extension point when Sackmann
+    yearly CSVs have not been published yet.
+    """
+    logger.info(
+        "Fallback source hook not yet implemented for %s %s; returning empty frame",
+        tour.upper(),
+        year,
     )
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    return pd.read_csv(io.StringIO(response.text))
+    return pd.DataFrame()
 
 
-def http_fallback_update(tour: str) -> PullResult:
+def _download_year_csv(tour: str, year: int) -> tuple[pd.DataFrame, str]:
+    urls = _candidate_sackmann_urls(tour, year)
+    missing_urls: list[str] = []
+    errors: list[str] = []
+
+    for url in urls:
+        try:
+            response = requests.get(url, timeout=30)
+        except requests.RequestException as exc:
+            errors.append(f"{url}: {exc}")
+            continue
+
+        if response.status_code == 404:
+            missing_urls.append(url)
+            continue
+
+        response.raise_for_status()
+        return pd.read_csv(io.StringIO(response.text)), url
+
+    fallback_df = _fetch_from_fallback_source(year, tour)
+    if not fallback_df.empty:
+        return fallback_df, f"fallback://{tour}/{year}"
+
+    if missing_urls and len(missing_urls) == len(urls):
+        raise SackmannYearUnavailableError(tour=tour, year=year, urls=missing_urls)
+
+    if errors:
+        raise RuntimeError("; ".join(errors))
+
+    raise RuntimeError(f"No downloadable CSV found for {tour} {year}")
+
+
+def http_fallback_update(tour: str, dry_run: bool = False) -> PullResult:
     raw_repo = RAW_REPOS[tour]
     raw_repo.mkdir(parents=True, exist_ok=True)
     years = [datetime.now(UTC).year - i for i in range(0, 3)]
 
     last_error = "No downloadable year file found"
+    skipped_years: list[int] = []
     for year in years:
         try:
-            remote_df = _download_year_csv(tour, year)
+            remote_df, used_url = _download_year_csv(tour, year)
+        except SackmannYearUnavailableError as exc:  # pragma: no cover - network variability
+            logger.warning(str(exc))
+            skipped_years.append(year)
+            last_error = str(exc)
+            continue
         except Exception as exc:  # pragma: no cover - network variability
             last_error = f"{year}: {exc}"
             continue
@@ -181,21 +240,32 @@ def http_fallback_update(tour: str) -> PullResult:
             except Exception:
                 local_rows = 0
 
+        action_prefix = "Would update" if dry_run else "Updated"
         if len(remote_df) > local_rows or not local_file.exists():
-            remote_df.to_csv(local_file, index=False)
+            if not dry_run:
+                remote_df.to_csv(local_file, index=False)
             return PullResult(
                 True,
-                "http",
-                f"Updated {local_file.name} via HTTP fallback",
+                "http_probe" if dry_run else "http",
+                f"{action_prefix} {local_file.name} via HTTP fallback ({used_url})",
                 rows_added=max(0, len(remote_df) - local_rows),
             )
 
-        return PullResult(True, "http", f"No new rows via HTTP fallback ({local_file.name})")
+        return PullResult(
+            True,
+            "http_probe" if dry_run else "http",
+            f"No new rows via HTTP fallback ({local_file.name}; source {used_url})",
+        )
 
-    return PullResult(False, "http", f"HTTP fallback failed: {last_error}")
+    skipped_msg = f"; skipped unavailable years: {', '.join(str(y) for y in skipped_years)}" if skipped_years else ""
+    return PullResult(
+        False,
+        "http_probe" if dry_run else "http",
+        f"HTTP fallback failed: {last_error}{skipped_msg}",
+    )
 
 
-def download_years_http_fallback(tour: str, years: list[int]) -> dict[str, Any]:
+def download_years_http_fallback(tour: str, years: list[int], dry_run: bool = False) -> dict[str, Any]:
     """Download explicit yearly CSV files from GitHub raw URLs when available."""
     raw_repo = RAW_REPOS[tour]
     raw_repo.mkdir(parents=True, exist_ok=True)
@@ -204,25 +274,9 @@ def download_years_http_fallback(tour: str, years: list[int]) -> dict[str, Any]:
     failed: list[dict[str, Any]] = []
 
     for year in years:
-        url = (
-            f"https://raw.githubusercontent.com/JeffSackmann/tennis_{tour}/"
-            f"master/{tour}_matches_{year}.csv"
-        )
         local_file = raw_repo / f"{tour}_matches_{year}.csv"
         try:
-            response = requests.get(url, timeout=45)
-            if response.status_code != 200:
-                failed.append(
-                    {
-                        "year": year,
-                        "status": response.status_code,
-                        "url": url,
-                        "reason": "non_200",
-                    }
-                )
-                continue
-
-            remote_df = pd.read_csv(io.StringIO(response.text))
+            remote_df, url = _download_year_csv(tour, year)
             if remote_df.empty:
                 failed.append(
                     {
@@ -241,7 +295,8 @@ def download_years_http_fallback(tour: str, years: list[int]) -> dict[str, Any]:
                 except Exception:
                     old_rows = 0
 
-            remote_df.to_csv(local_file, index=False)
+            if not dry_run:
+                remote_df.to_csv(local_file, index=False)
             downloaded.append(
                 {
                     "year": year,
@@ -249,6 +304,17 @@ def download_years_http_fallback(tour: str, years: list[int]) -> dict[str, Any]:
                     "rows_added": max(0, int(len(remote_df)) - old_rows),
                     "file": str(local_file),
                     "url": url,
+                    "dry_run": dry_run,
+                }
+            )
+        except SackmannYearUnavailableError as exc:
+            logger.warning(str(exc))
+            failed.append(
+                {
+                    "year": year,
+                    "status": 404,
+                    "url": exc.urls[0] if exc.urls else None,
+                    "reason": "not_yet_available",
                 }
             )
         except Exception as exc:
@@ -256,7 +322,7 @@ def download_years_http_fallback(tour: str, years: list[int]) -> dict[str, Any]:
                 {
                     "year": year,
                     "status": None,
-                    "url": url,
+                    "url": None,
                     "reason": str(exc),
                 }
             )
@@ -501,17 +567,22 @@ def get_staleness_status(last_match_date: date | None, today: date | None = None
     }
 
 
-def update_data_sources() -> dict[str, Any]:
+def update_data_sources(dry_run: bool = False) -> dict[str, Any]:
     report: dict[str, Any] = {
         "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tours": {},
+        "dry_run": dry_run,
     }
 
     for tour, repo_path in RAW_REPOS.items():
-        git_result = pull_sackmann_repo(repo_path)
-        final_result = git_result
-        if not git_result.success:
-            final_result = http_fallback_update(tour)
+        if dry_run:
+            git_result = PullResult(True, "dry_run", "Skipped git pull in dry-run mode")
+            final_result = http_fallback_update(tour, dry_run=True)
+        else:
+            git_result = pull_sackmann_repo(repo_path)
+            final_result = git_result
+            if not git_result.success:
+                final_result = http_fallback_update(tour)
 
         latest_raw = get_latest_match_date_from_raw(tour)
         report["tours"][tour] = {
@@ -549,17 +620,18 @@ def update_data_sources() -> dict[str, Any]:
     staleness = get_staleness_status(last_new_match)
     report["staleness"] = staleness
 
-    state = prev_state
-    state.update(
-        {
-            "updated_at": report["timestamp"],
-            "sackmann_pull": report["timestamp"],
-            "tours": report["tours"],
-            "last_new_match": last_new_match.strftime(DATE_FMT) if last_new_match else None,
-            "staleness": staleness,
-        }
-    )
-    save_last_update(state)
+    if not dry_run:
+        state = prev_state
+        state.update(
+            {
+                "updated_at": report["timestamp"],
+                "sackmann_pull": report["timestamp"],
+                "tours": report["tours"],
+                "last_new_match": last_new_match.strftime(DATE_FMT) if last_new_match else None,
+                "staleness": staleness,
+            }
+        )
+        save_last_update(state)
 
     return report
 
@@ -825,7 +897,20 @@ def scrape_flashscore_results() -> dict[str, Any]:
 
 
 def main() -> None:
-    report = update_data_sources()
+    parser = argparse.ArgumentParser(description="Update local tennis raw data sources")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Probe remote sources and log what would happen without writing files",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    )
+
+    report = update_data_sources(dry_run=args.dry_run)
     print(json.dumps(report, indent=2))
 
 

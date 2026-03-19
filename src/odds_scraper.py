@@ -18,7 +18,9 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 
-from config import ODDS_HISTORY_FILE, ODDS_UPCOMING_FILE
+from config import ODDS_HISTORY_FILE, ODDS_MOVEMENT_FILE, ODDS_UPCOMING_FILE
+from src.odds_tracker import write_odds_movement_snapshot
+from src.sqlite_storage import initialize_database, sync_odds_frame
 
 FLASHSCORE_TENNIS_URL = "https://www.flashscore.com/tennis/"
 FUZZY_THRESHOLD = 85
@@ -41,6 +43,9 @@ OUTPUT_COLUMNS = [
     "player_2_match_score",
     "odds_p1",
     "odds_p2",
+    "bookmaker",
+    "bookmaker_count",
+    "aggregation_method",
     "source_url",
     "match_id",
     "captured_at",
@@ -224,6 +229,36 @@ def _click_odds_tab(driver: webdriver.Chrome) -> None:
         raise TimeoutException("ODDS tab not found on Flashscore page.")
 
 
+def _scrape_match_market_odds(driver: webdriver.Chrome, source_url: str) -> tuple[float | None, float | None, int]:
+    odds_url = source_url.split("?", 1)[0].rstrip("/") + "/odds/home-away/full-time/"
+    driver.get(odds_url)
+    _sleep_rate_limit()
+
+    rows = driver.find_elements(By.CSS_SELECTOR, ".ui-table__body .ui-table__row")
+    values: list[tuple[float, float]] = []
+    for row in rows:
+        try:
+            odd_cells = row.find_elements(By.CSS_SELECTOR, ".oddsCell__odd")
+            if len(odd_cells) < 2:
+                continue
+            odd1 = float(odd_cells[0].text.strip())
+            odd2 = float(odd_cells[1].text.strip())
+            if odd1 > 1.0 and odd2 > 1.0:
+                values.append((odd1, odd2))
+        except Exception:
+            continue
+
+    if not values:
+        return None, None, 0
+
+    odds_df = pd.DataFrame(values, columns=["odds_p1", "odds_p2"])
+    return (
+        round(float(odds_df["odds_p1"].median()), 3),
+        round(float(odds_df["odds_p2"].median()), 3),
+        int(len(odds_df)),
+    )
+
+
 def scrape_flashscore_upcoming_odds() -> pd.DataFrame:
     _setup_logging()
 
@@ -320,6 +355,33 @@ def scrape_flashscore_upcoming_odds() -> pd.DataFrame:
 
         df = pd.DataFrame(rows_out)
         if not df.empty:
+            for row in rows_out:
+                source_url = str(row.get("source_url") or "").strip()
+                if not source_url:
+                    row["bookmaker"] = "flashscore_event_page"
+                    row["bookmaker_count"] = 1
+                    row["aggregation_method"] = "single_source"
+                    continue
+                try:
+                    median_p1, median_p2, bookmaker_count = _scrape_match_market_odds(driver, source_url)
+                except Exception as exc:
+                    logger.debug("Market odds scrape failed for %s: %s", source_url, exc)
+                    median_p1 = None
+                    median_p2 = None
+                    bookmaker_count = 0
+
+                if median_p1 is not None and median_p2 is not None and bookmaker_count > 0:
+                    row["odds_p1"] = median_p1
+                    row["odds_p2"] = median_p2
+                    row["bookmaker"] = "flashscore_market_median"
+                    row["bookmaker_count"] = bookmaker_count
+                    row["aggregation_method"] = "median"
+                else:
+                    row["bookmaker"] = "flashscore_event_page"
+                    row["bookmaker_count"] = 1
+                    row["aggregation_method"] = "single_source"
+
+            df = pd.DataFrame(rows_out)
             df = df[OUTPUT_COLUMNS].drop_duplicates(subset=["match_id", "captured_at"], keep="last")
         else:
             df = pd.DataFrame(columns=OUTPUT_COLUMNS)
@@ -333,12 +395,14 @@ def scrape_flashscore_upcoming_odds() -> pd.DataFrame:
 
 def _ensure_manual_template() -> None:
     ODDS_UPCOMING_FILE.parent.mkdir(parents=True, exist_ok=True)
+    initialize_database()
     if not ODDS_UPCOMING_FILE.exists() or ODDS_UPCOMING_FILE.stat().st_size == 0:
         pd.DataFrame(columns=OUTPUT_COLUMNS).to_csv(ODDS_UPCOMING_FILE, index=False)
 
 
 def _write_outputs(upcoming_df: pd.DataFrame) -> tuple[Path, Path]:
     ODDS_UPCOMING_FILE.parent.mkdir(parents=True, exist_ok=True)
+    initialize_database()
 
     # Overwrite today's odds snapshot
     upcoming_df.to_csv(ODDS_UPCOMING_FILE, index=False)
@@ -358,6 +422,8 @@ def _write_outputs(upcoming_df: pd.DataFrame) -> tuple[Path, Path]:
     else:
         history = pd.concat([history[OUTPUT_COLUMNS], upcoming_df[OUTPUT_COLUMNS]], ignore_index=True)
     history.to_csv(ODDS_HISTORY_FILE, index=False)
+    sync_odds_frame(upcoming_df, mark_current_upcoming=False, source_name="odds_history")
+    sync_odds_frame(upcoming_df, mark_current_upcoming=True, source_name="odds_upcoming")
 
     return ODDS_UPCOMING_FILE, ODDS_HISTORY_FILE
 
@@ -368,6 +434,10 @@ def refresh_odds() -> dict[str, Any]:
     try:
         upcoming = scrape_flashscore_upcoming_odds()
         upcoming_path, history_path = _write_outputs(upcoming)
+        movement_report = write_odds_movement_snapshot(
+            output_path=ODDS_MOVEMENT_FILE,
+            current_df=upcoming,
+        )
         return {
             "success": True,
             "method": "selenium_flashscore",
@@ -375,6 +445,8 @@ def refresh_odds() -> dict[str, Any]:
             "upcoming_rows": int(len(upcoming)),
             "upcoming_file": str(upcoming_path),
             "history_file": str(history_path),
+            "movement_file": movement_report["output_path"],
+            "movement_rows": movement_report["rows"],
             "captured_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
     except (TimeoutException, WebDriverException, Exception) as exc:
@@ -387,6 +459,8 @@ def refresh_odds() -> dict[str, Any]:
             "upcoming_rows": 0,
             "upcoming_file": str(ODDS_UPCOMING_FILE),
             "history_file": str(ODDS_HISTORY_FILE),
+            "movement_file": str(ODDS_MOVEMENT_FILE),
+            "movement_rows": 0,
             "captured_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 

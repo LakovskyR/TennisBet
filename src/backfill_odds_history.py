@@ -13,6 +13,8 @@ from urllib.parse import parse_qs, urlparse
 import pandas as pd
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 from config import ODDS_HISTORY_FILE, PROCESSED_DIR
 from src.backfill_matches import ALL_REGISTRIES
@@ -23,6 +25,7 @@ from src.odds_scraper import (
     _load_name_overrides,
     _normalize_name,
     _resolve_player_name,
+    _scrape_match_market_odds,
     _setup_logging,
     logger,
 )
@@ -36,6 +39,21 @@ RESULTS_URL_PATTERNS = [
 
 def _sleep(min_seconds: float = 0.6, max_seconds: float = 1.2) -> None:
     time.sleep(random.uniform(min_seconds, max_seconds))
+
+
+def _stop_page_load(driver: Any) -> None:
+    try:
+        driver.execute_script("window.stop()")
+    except Exception:
+        pass
+
+
+def _safe_get(driver: Any, url: str) -> None:
+    try:
+        driver.get(url)
+    except TimeoutException:
+        logger.warning("Timed out loading %s; stopping page load and continuing", url)
+        _stop_page_load(driver)
 
 
 def _accept_cookies(driver: Any) -> None:
@@ -188,8 +206,13 @@ def _open_results_page(driver: Any, tour: str, slug: str, year: int) -> str | No
         url = pattern.format(tour_prefix=tour_prefix, slug=slug, year=year)
         try:
             logger.info("Opening results page: %s", url)
-            driver.get(url)
-            _sleep()
+            _safe_get(driver, url)
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "div.event__match"))
+                )
+            except TimeoutException:
+                continue
             heading_year = ""
             headings = driver.find_elements(By.CSS_SELECTOR, ".heading__info")
             if headings:
@@ -199,14 +222,6 @@ def _open_results_page(driver: Any, tour: str, slug: str, year: int) -> str | No
             matches = driver.find_elements(By.CSS_SELECTOR, "div.event__match")
             if matches:
                 return url
-            tabs = driver.find_elements(By.CSS_SELECTOR, "a.tabs__tab")
-            for tab in tabs:
-                if (tab.text or "").strip().upper() == "RESULTS":
-                    tab.click()
-                    _sleep()
-                    matches = driver.find_elements(By.CSS_SELECTOR, "div.event__match")
-                    if matches:
-                        return url
         except Exception:
             continue
     return None
@@ -317,33 +332,7 @@ def _scrape_tournament_matches(
 
 
 def _scrape_match_odds(driver: Any, source_url: str) -> tuple[float | None, float | None, int]:
-    odds_url = source_url.split("?", 1)[0].rstrip("/") + "/odds/home-away/full-time/"
-    driver.get(odds_url)
-    _sleep()
-
-    rows = driver.find_elements(By.CSS_SELECTOR, ".ui-table__body .ui-table__row")
-    values: list[tuple[float, float]] = []
-    for row in rows:
-        try:
-            odd_cells = row.find_elements(By.CSS_SELECTOR, ".oddsCell__odd")
-            if len(odd_cells) < 2:
-                continue
-            odd1 = float(odd_cells[0].text.strip())
-            odd2 = float(odd_cells[1].text.strip())
-            if odd1 > 1.0 and odd2 > 1.0:
-                values.append((odd1, odd2))
-        except Exception:
-            continue
-
-    if not values:
-        return None, None, 0
-
-    odds_df = pd.DataFrame(values, columns=["odds_p1", "odds_p2"])
-    return (
-        round(float(odds_df["odds_p1"].median()), 3),
-        round(float(odds_df["odds_p2"].median()), 3),
-        int(len(odds_df)),
-    )
+    return _scrape_match_market_odds(driver, source_url)
 
 
 def _append_history(rows: list[dict[str, Any]]) -> tuple[int, int]:
@@ -387,6 +376,7 @@ def backfill_historical_odds(
     limit_tournaments: int | None = None,
     max_matches_per_tournament: int | None = None,
     only_matchable: bool = True,
+    page_load_timeout: int = 30,
 ) -> dict[str, Any]:
     _setup_logging()
     player_pool, name_to_id, last_initial_index = _build_player_pool()
@@ -394,6 +384,8 @@ def backfill_historical_odds(
     existing_match_ids = _load_existing_match_ids()
 
     driver = _init_driver()
+    driver.set_page_load_timeout(page_load_timeout)
+    driver.set_script_timeout(15)
     _accept_cookies(driver)
     captured_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -430,20 +422,54 @@ def backfill_historical_odds(
 
                 for tournament in registry:
                     logger.info("Tournament: %s %s", tour.upper(), tournament["name"])
-                    matches = _scrape_tournament_matches(
-                        driver=driver,
-                        tournament=tournament,
-                        tour=tour,
-                        year=year,
-                        player_pool=resolver_pool,
-                        name_to_id=resolver_name_to_id,
-                        last_initial_index=resolver_last_initial_index,
-                        overrides=overrides,
-                        feature_keys=feature_keys,
-                        existing_match_ids=existing_match_ids,
-                        only_matchable=only_matchable,
-                        max_matches=max_matches_per_tournament,
-                    )
+                    matches: list[dict[str, Any]] = []
+                    tournament_failed = False
+                    for attempt in range(1, 3):
+                        try:
+                            matches = _scrape_tournament_matches(
+                                driver=driver,
+                                tournament=tournament,
+                                tour=tour,
+                                year=year,
+                                player_pool=resolver_pool,
+                                name_to_id=resolver_name_to_id,
+                                last_initial_index=resolver_last_initial_index,
+                                overrides=overrides,
+                                feature_keys=feature_keys,
+                                existing_match_ids=existing_match_ids,
+                                only_matchable=only_matchable,
+                                max_matches=max_matches_per_tournament,
+                            )
+                            break
+                        except (TimeoutException, WebDriverException) as exc:
+                            tournament_failed = True
+                            logger.warning(
+                                "Tournament scrape failed for %s %s on attempt %d/2: %s",
+                                tour.upper(),
+                                tournament["slug"],
+                                attempt,
+                                exc,
+                            )
+                            _stop_page_load(driver)
+                    else:
+                        logger.warning(
+                            "Skipping %s %s after 2 failed attempts",
+                            tour.upper(),
+                            tournament["slug"],
+                        )
+
+                    if tournament_failed and not matches:
+                        tournament_reports.append(
+                            {
+                                "tour": tour,
+                                "year": year,
+                                "slug": tournament["slug"],
+                                "name": tournament["name"],
+                                "matches_considered": 0,
+                                "rows_added": 0,
+                            }
+                        )
+                        continue
 
                     added_for_tournament = 0
                     for row in matches:
@@ -457,6 +483,9 @@ def backfill_historical_odds(
                                 **row,
                                 "odds_p1": odds_p1,
                                 "odds_p2": odds_p2,
+                                "bookmaker": "flashscore_market_median",
+                                "bookmaker_count": bookmaker_count,
+                                "aggregation_method": "median",
                                 "captured_at": captured_at,
                             }
                         )
@@ -506,6 +535,12 @@ def main() -> None:
     parser.add_argument("--limit-tournaments", type=int, default=None, help="Optional max number of tournaments per tour/year")
     parser.add_argument("--max-matches-per-tournament", type=int, default=None, help="Optional cap on matched rows scraped per tournament")
     parser.add_argument(
+        "--page-load-timeout",
+        type=int,
+        default=30,
+        help="Page load timeout in seconds before stopping the current load and continuing",
+    )
+    parser.add_argument(
         "--include-non-matchable",
         action="store_true",
         help="Do not restrict scraping to matches that already exist in local feature data",
@@ -519,6 +554,7 @@ def main() -> None:
         limit_tournaments=args.limit_tournaments,
         max_matches_per_tournament=args.max_matches_per_tournament,
         only_matchable=not args.include_non_matchable,
+        page_load_timeout=args.page_load_timeout,
     )
     print(json.dumps(report, indent=2))
 

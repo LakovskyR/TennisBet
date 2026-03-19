@@ -3,8 +3,13 @@
 import argparse
 import hashlib
 import json
+import logging
 import math
+import pickle
 import re
+import shutil
+import sys
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -12,6 +17,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
+
+if __package__ in {None, ""}:
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from config import LAST_UPDATE_FILE, MODELS_DIR, OPTUNA_TRIALS, PROCESSED_DIR, TRAIN_CUTOFF
 
@@ -26,9 +34,21 @@ except Exception:  # pragma: no cover
     XGBClassifier = None
 
 try:
+    from lightgbm import Booster as LGBMBooster
+    from lightgbm import LGBMClassifier
+    from lightgbm import early_stopping as lgbm_early_stopping
+except Exception:  # pragma: no cover
+    LGBMBooster = None
+    LGBMClassifier = None
+    lgbm_early_stopping = None
+
+try:
     import optuna
 except Exception:  # pragma: no cover
     optuna = None
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 
 CAT_COLS = ["surface", "tournament_level", "round", "best_of"]
 TARGET_COL = "p1_wins"
@@ -37,6 +57,22 @@ DEFAULT_TEMPORAL_CV_FOLDS = 3
 TRAINING_STATE_FILE = MODELS_DIR / "training_state.json"
 RETRAIN_WEEKLY_DAYS = 7
 RETRAIN_MATCH_THRESHOLD = 50
+TUNING_FOLDS = 3
+PREDICTION_INTERVAL_ALPHA = 0.10
+DEFAULT_ENSEMBLE_WEIGHTS = {
+    "winner": "cat60_xgb40",
+    "weights": {"catboost": 3 / 5, "xgboost": 2 / 5},
+}
+BASE_MODEL_ORDER = ["catboost", "xgboost", "lgbm", "rf", "elasticnet", "logreg"]
+BASE_MODEL_LABELS = {
+    "catboost": "catboost",
+    "xgboost": "xgboost",
+    "lgbm": "lgbm",
+    "rf": "rf",
+    "elasticnet": "elasticnet",
+    "logreg": "logreg",
+}
+log = logging.getLogger("model_training")
 
 
 def _safe_json_load(path: Path) -> dict[str, Any]:
@@ -51,6 +87,42 @@ def _safe_json_load(path: Path) -> dict[str, Any]:
 def _safe_json_dump(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _higher_quantile(values: np.ndarray, q: float) -> float:
+    if values.size == 0:
+        return 0.0
+    q = min(max(float(q), 0.0), 1.0)
+    try:
+        return float(np.quantile(values, q, method="higher"))
+    except TypeError:  # pragma: no cover
+        return float(np.quantile(values, q, interpolation="higher"))
+
+
+def _build_prediction_interval_payload(
+    y_true: pd.Series | np.ndarray,
+    probs: np.ndarray,
+    *,
+    alpha: float = PREDICTION_INTERVAL_ALPHA,
+) -> dict[str, Any]:
+    truth = np.asarray(y_true, dtype=float)
+    clipped = np.clip(np.asarray(probs, dtype=float), 1e-6, 1 - 1e-6)
+    residuals = np.abs(truth - clipped)
+    n = int(residuals.size)
+    conformal_q = min(1.0, math.ceil((n + 1) * (1 - alpha)) / max(n, 1))
+    radius = _higher_quantile(residuals, conformal_q)
+    lower = np.clip(clipped - radius, 0.0, 1.0)
+    upper = np.clip(clipped + radius, 0.0, 1.0)
+    coverage = float(np.mean((truth >= lower) & (truth <= upper))) if n else 0.0
+    return {
+        "method": "split_conformal_absolute_residual",
+        "alpha": float(alpha),
+        "confidence_level": float(1.0 - alpha),
+        "residual_quantile": float(radius),
+        "empirical_coverage": coverage,
+        "mean_interval_width": float(np.mean(upper - lower)) if n else 0.0,
+        "n_test": n,
+    }
 
 
 def _parse_utc_timestamp(value: Any) -> datetime | None:
@@ -112,13 +184,51 @@ def _artifacts_for_tour(tour: str) -> dict[str, Path]:
     return {
         "catboost_model": MODELS_DIR / f"catboost_{tour}.cbm",
         "xgboost_model": MODELS_DIR / f"xgboost_{tour}.json",
+        "lgbm_model": MODELS_DIR / f"lgbm_{tour}.txt",
+        "rf_model": MODELS_DIR / f"rf_{tour}.pkl",
+        "elasticnet_model": MODELS_DIR / f"elasticnet_{tour}.pkl",
+        "logreg_model": MODELS_DIR / f"logreg_{tour}.pkl",
+        "ensemble_config": MODELS_DIR / f"ensemble_config_{tour}.json",
         "preprocess": MODELS_DIR / f"preprocess_{tour}.json",
         "report": MODELS_DIR / f"model_report_{tour}.json",
     }
 
 
+def _best_params_path(tour: str, model: str) -> Path:
+    return MODELS_DIR / f"best_params_{tour}_{model}.json"
+
+
+def _load_best_params(tour: str, model: str) -> dict[str, Any]:
+    payload = _safe_json_load(_best_params_path(tour, model))
+    params = payload.get("params")
+    return params if isinstance(params, dict) else {}
+
+
+def _save_best_params(tour: str, model: str, score: float, params: dict[str, Any]) -> Path:
+    path = _best_params_path(tour, model)
+    _safe_json_dump(
+        path,
+        {
+            "tour": tour,
+            "model": model,
+            "score": float(score),
+            "params": params,
+            "updated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+    )
+    return path
+
+
 def _artifacts_missing(tour: str) -> list[str]:
-    return [name for name, path in _artifacts_for_tour(tour).items() if not path.exists()]
+    artifacts = _artifacts_for_tour(tour)
+    required = {"preprocess", "report", "ensemble_config"}
+    ensemble_config = _safe_json_load(artifacts["ensemble_config"])
+    active_models = list(ensemble_config.get("weights", {}).keys()) if ensemble_config else list(DEFAULT_ENSEMBLE_WEIGHTS["weights"].keys())
+    for model_name in active_models:
+        model_key = f"{model_name}_model"
+        if model_key in artifacts:
+            required.add(model_key)
+    return [name for name in required if not artifacts[name].exists()]
 
 
 def _load_training_state(path: Path = TRAINING_STATE_FILE) -> dict[str, Any]:
@@ -322,6 +432,22 @@ def maybe_retrain_models(
     )
     selected_tours = list(tours) if force else list(policy.get("tours_to_retrain", []))
     if not selected_tours:
+        if not force:
+            summary: list[str] = []
+            now = datetime.now(UTC)
+            for tour in tours:
+                decision = policy.get("tours", {}).get(tour, {})
+                trained_at = _parse_utc_timestamp(decision.get("trained_at"))
+                days_ago = "unknown"
+                if trained_at is not None:
+                    days_ago = str(max(0, int((now - trained_at).total_seconds() // 86400)))
+                summary.append(
+                    f"{str(tour).upper()}: last trained {days_ago}d ago, "
+                    f"{int(decision.get('new_feature_rows', 0))} new matches "
+                    f"(threshold: {RETRAIN_MATCH_THRESHOLD})"
+                )
+            if summary:
+                log.info("Retrain skipped: %s", "; ".join(summary))
         return {
             "triggered": False,
             "force": force,
@@ -526,216 +652,932 @@ def _metric_pack(y_true: pd.Series, probs: np.ndarray) -> dict[str, float]:
     }
 
 
-def _fit_optuna_catboost(
-    x_train: pd.DataFrame,
-    y_train: pd.Series,
-    x_val: pd.DataFrame,
-    y_val: pd.Series,
-    cat_cols: list[str],
-    n_trials: int,
-    fast: bool,
-) -> dict[str, Any]:
-    if optuna is None or CatBoostClassifier is None or n_trials <= 0:
-        return {}
+def _serialize_params(params: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in params.items():
+        if isinstance(value, (np.integer, np.floating)):
+            out[key] = value.item()
+        else:
+            out[key] = value
+    return out
 
-    def objective(trial: "optuna.Trial") -> float:
-        params = {
-            "iterations": 400 if fast else 800,
-            "learning_rate": trial.suggest_float("learning_rate", 0.02, 0.15, log=True),
-            "depth": trial.suggest_int("depth", 4, 8),
-            "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 10.0),
-            "random_seed": 42,
+
+def _available_model_names() -> list[str]:
+    available: list[str] = []
+    if CatBoostClassifier is None:
+        print("WARNING: CatBoost not installed; skipping catboost")
+    else:
+        available.append("catboost")
+
+    if XGBClassifier is None:
+        print("WARNING: XGBoost not installed; skipping xgboost")
+    else:
+        available.append("xgboost")
+
+    if LGBMClassifier is None:
+        print("WARNING: LightGBM not installed; skipping lgbm")
+    else:
+        available.append("lgbm")
+
+    available.extend(["rf", "elasticnet", "logreg"])
+    return available
+
+
+def _ensemble_config_path(tour: str) -> Path:
+    return MODELS_DIR / f"ensemble_config_{tour}.json"
+
+
+def _load_ensemble_config(tour: str) -> dict[str, Any]:
+    path = _ensemble_config_path(tour)
+    if not path.exists():
+        return dict(DEFAULT_ENSEMBLE_WEIGHTS)
+    payload = _safe_json_load(path)
+    weights = payload.get("weights")
+    if not isinstance(weights, dict) or not weights:
+        return dict(DEFAULT_ENSEMBLE_WEIGHTS)
+    return payload
+
+
+def _save_ensemble_config(
+    tour: str,
+    winner_name: str,
+    winner_weights: dict[str, float],
+    metrics: dict[str, float],
+) -> Path:
+    path = _ensemble_config_path(tour)
+    _safe_json_dump(
+        path,
+        {
+            "winner": winner_name,
+            "weights": {name: float(weight) for name, weight in winner_weights.items()},
+            "cv_log_loss": float(metrics["cv_log_loss"]),
+            "cv_brier": float(metrics["cv_brier"]),
+            "cv_accuracy": float(metrics["cv_accuracy"]),
+            "selection_date": datetime.now(UTC).date().isoformat(),
+        },
+    )
+    return path
+
+
+def _default_model_params(model_name: str, *, fast: bool) -> dict[str, Any]:
+    if model_name == "catboost":
+        return {
+            "iterations": 500 if fast else 1000,
+            "learning_rate": 0.05,
+            "depth": 6,
+            "l2_leaf_reg": 3.0,
+            "border_count": 128,
             "loss_function": "Logloss",
             "eval_metric": "Logloss",
-            "early_stopping_rounds": 50,
             "verbose": False,
+            "random_seed": 42,
+            "thread_count": -1,
         }
-        model = CatBoostClassifier(**params)
-        model.fit(x_train, y_train, cat_features=cat_cols, eval_set=(x_val, y_val), use_best_model=True)
-        preds = model.predict_proba(x_val)[:, 1]
-        return log_loss(y_val, preds, labels=[0, 1])
-
-    study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-    return study.best_params if study.best_trial else {}
-
-
-def _fit_optuna_xgboost(
-    x_train: pd.DataFrame,
-    y_train: pd.Series,
-    x_val: pd.DataFrame,
-    y_val: pd.Series,
-    n_trials: int,
-    fast: bool,
-) -> dict[str, Any]:
-    if optuna is None or XGBClassifier is None or n_trials <= 0:
-        return {}
-
-    def objective(trial: "optuna.Trial") -> float:
-        params = {
-            "n_estimators": 400 if fast else 800,
-            "learning_rate": trial.suggest_float("learning_rate", 0.02, 0.15, log=True),
-            "max_depth": trial.suggest_int("max_depth", 4, 8),
-            "subsample": trial.suggest_float("subsample", 0.7, 1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
-            "reg_lambda": trial.suggest_float("reg_lambda", 1.0, 10.0),
+    if model_name == "xgboost":
+        return {
+            "n_estimators": 500 if fast else 800,
+            "learning_rate": 0.05,
+            "max_depth": 6,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "min_child_weight": 1,
             "eval_metric": "logloss",
             "random_state": 42,
             "n_jobs": -1,
-            "early_stopping_rounds": 50,
         }
-        model = XGBClassifier(**params)
-        model.fit(x_train, y_train, eval_set=[(x_val, y_val)], verbose=False)
-        preds = model.predict_proba(x_val)[:, 1]
-        return log_loss(y_val, preds, labels=[0, 1])
+    if model_name == "lgbm":
+        return {
+            "n_estimators": 500 if fast else 800,
+            "learning_rate": 0.05,
+            "max_depth": 6,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "min_child_weight": 1,
+            "objective": "binary",
+            "random_state": 42,
+            "n_jobs": -1,
+            "verbosity": -1,
+        }
+    if model_name == "rf":
+        return {
+            "n_estimators": 300 if fast else 700,
+            "max_depth": 10 if fast else None,
+            "min_samples_leaf": 2,
+            "random_state": 42,
+            "n_jobs": -1,
+        }
+    if model_name == "elasticnet":
+        return {
+            "solver": "saga",
+            "penalty": "elasticnet",
+            "l1_ratio": 0.5,
+            "max_iter": 2000,
+            "C": 1.0,
+            "random_state": 42,
+        }
+    if model_name == "logreg":
+        return {
+            "solver": "lbfgs",
+            "max_iter": 1000,
+            "C": 1.0,
+            "random_state": 42,
+        }
+    raise KeyError(f"Unsupported model: {model_name}")
 
-    study = optuna.create_study(direction="minimize")
+
+def _best_param_keys(model_name: str) -> set[str]:
+    if model_name == "catboost":
+        return {"learning_rate", "depth", "l2_leaf_reg", "iterations", "border_count"}
+    if model_name in {"xgboost", "lgbm"}:
+        return {
+            "learning_rate",
+            "max_depth",
+            "n_estimators",
+            "subsample",
+            "colsample_bytree",
+            "min_child_weight",
+        }
+    if model_name == "elasticnet":
+        return {"C", "l1_ratio", "max_iter"}
+    return set()
+
+
+def _build_model_params(
+    tour: str,
+    model_name: str,
+    *,
+    fast: bool,
+    tuned_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    params = _default_model_params(model_name, fast=fast)
+    stored = _load_best_params(tour, model_name)
+    allowed = _best_param_keys(model_name)
+    if allowed:
+        params.update({k: v for k, v in stored.items() if k in allowed})
+    if tuned_params:
+        params.update({k: v for k, v in tuned_params.items() if not allowed or k in allowed})
+    if model_name == "catboost":
+        params["thread_count"] = params.get("thread_count", -1)
+    return params
+
+
+def _build_model_matrices(
+    train_df: pd.DataFrame,
+    eval_df: pd.DataFrame,
+) -> dict[str, Any]:
+    x_train, y_train, x_eval, y_eval, feature_cols, cat_cols = _prepare_frames(train_df, eval_df)
+    num_cols = [c for c in feature_cols if c not in cat_cols]
+    x_train_tab, x_eval_tab = _to_xgb_matrix(x_train, x_eval, cat_cols)
+    return {
+        "x_train_cat": x_train,
+        "y_train": y_train,
+        "x_eval_cat": x_eval,
+        "y_eval": y_eval,
+        "feature_cols": feature_cols,
+        "cat_cols": cat_cols,
+        "num_cols": num_cols,
+        "x_train_tab": x_train_tab,
+        "x_eval_tab": x_eval_tab,
+    }
+
+
+def _fit_selection_model(
+    model_name: str,
+    params: dict[str, Any],
+    train_df: pd.DataFrame,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if model_name not in {"catboost", "xgboost", "lgbm"}:
+        return _serialize_params(params), {}
+
+    train_core, val_core = _split_train_validation(train_df)
+    if train_core.empty or val_core.empty:
+        return _serialize_params(params), {}
+
+    selection_inputs = _build_model_matrices(train_core, val_core)
+    final_params = dict(params)
+    details: dict[str, Any] = {}
+
+    if model_name == "catboost":
+        selection_model = CatBoostClassifier(**params)
+        selection_model.fit(
+            selection_inputs["x_train_cat"],
+            selection_inputs["y_train"],
+            cat_features=selection_inputs["cat_cols"],
+            eval_set=(selection_inputs["x_eval_cat"], selection_inputs["y_eval"]),
+            use_best_model=True,
+            early_stopping_rounds=50,
+        )
+        best_iterations = _choose_iteration_count(selection_model, int(params["iterations"]), "best_iteration_")
+        final_params["iterations"] = best_iterations
+        details["best_iterations"] = int(best_iterations)
+    elif model_name == "xgboost":
+        selection_model = XGBClassifier(**{**params, "early_stopping_rounds": 50})
+        selection_model.fit(
+            selection_inputs["x_train_tab"],
+            selection_inputs["y_train"],
+            eval_set=[(selection_inputs["x_eval_tab"], selection_inputs["y_eval"])],
+            verbose=False,
+        )
+        best_estimators = _choose_iteration_count(selection_model, int(params["n_estimators"]), "best_iteration")
+        final_params["n_estimators"] = best_estimators
+        details["best_estimators"] = int(best_estimators)
+    else:
+        selection_model = LGBMClassifier(**params)
+        selection_model.fit(
+            selection_inputs["x_train_tab"],
+            selection_inputs["y_train"],
+            eval_set=[(selection_inputs["x_eval_tab"], selection_inputs["y_eval"])],
+            callbacks=[lgbm_early_stopping(50, verbose=False)] if lgbm_early_stopping is not None else None,
+        )
+        best_estimators = _choose_iteration_count(selection_model, int(params["n_estimators"]), "best_iteration_")
+        final_params["n_estimators"] = best_estimators
+        details["best_estimators"] = int(best_estimators)
+
+    return _serialize_params(final_params), details
+
+
+def _fit_model(
+    model_name: str,
+    params: dict[str, Any],
+    matrices: dict[str, Any],
+) -> Any:
+    if model_name == "catboost":
+        model = CatBoostClassifier(**params)
+        model.fit(
+            matrices["x_train_cat"],
+            matrices["y_train"],
+            cat_features=matrices["cat_cols"],
+            verbose=False,
+        )
+        return model
+    if model_name == "xgboost":
+        model = XGBClassifier(**params)
+        model.fit(matrices["x_train_tab"], matrices["y_train"], verbose=False)
+        return model
+    if model_name == "lgbm":
+        model = LGBMClassifier(**params)
+        model.fit(matrices["x_train_tab"], matrices["y_train"])
+        return model
+    if model_name == "rf":
+        model = RandomForestClassifier(**params)
+        model.fit(matrices["x_train_tab"], matrices["y_train"])
+        return model
+    if model_name == "elasticnet":
+        model = LogisticRegression(**params)
+        model.fit(matrices["x_train_tab"], matrices["y_train"])
+        return model
+    if model_name == "logreg":
+        model = LogisticRegression(**params)
+        model.fit(matrices["x_train_tab"], matrices["y_train"])
+        return model
+    raise KeyError(f"Unsupported model: {model_name}")
+
+
+def _predict_model_proba(model_name: str, model: Any, matrices: dict[str, Any]) -> np.ndarray:
+    if model_name == "catboost":
+        return model.predict_proba(matrices["x_eval_cat"])[:, 1]
+    return model.predict_proba(matrices["x_eval_tab"])[:, 1]
+
+
+def _model_artifact_path(tour: str, model_name: str) -> Path:
+    suffixes = {
+        "catboost": f"catboost_{tour}.cbm",
+        "xgboost": f"xgboost_{tour}.json",
+        "lgbm": f"lgbm_{tour}.txt",
+        "rf": f"rf_{tour}.pkl",
+        "elasticnet": f"elasticnet_{tour}.pkl",
+        "logreg": f"logreg_{tour}.pkl",
+    }
+    return MODELS_DIR / suffixes[model_name]
+
+
+def _save_model_artifact(model_name: str, model: Any, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if model_name == "catboost":
+        model.save_model(path)
+        return
+    if model_name == "xgboost":
+        model.save_model(path)
+        return
+    if model_name == "lgbm":
+        booster = model.booster_ if hasattr(model, "booster_") else model
+        with tempfile.NamedTemporaryFile(prefix="tennisbet_lgbm_", suffix=".txt", delete=False) as handle:
+            temp_path = Path(handle.name)
+        try:
+            booster.save_model(str(temp_path))
+            shutil.copyfile(temp_path, path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+        return
+    with path.open("wb") as handle:
+        pickle.dump(model, handle)
+
+
+def _feature_importance_rows(model_name: str, model: Any, feature_names: list[str]) -> pd.DataFrame:
+    if model_name == "catboost":
+        values = list(model.get_feature_importance())
+    elif hasattr(model, "feature_importances_"):
+        values = list(model.feature_importances_)
+    elif hasattr(model, "coef_"):
+        coef = np.ravel(getattr(model, "coef_"))
+        values = list(np.abs(coef))
+    else:
+        return pd.DataFrame(columns=["model", "feature", "importance"])
+    return pd.DataFrame({"model": model_name, "feature": feature_names, "importance": values})
+
+
+def _mean_metric_from_rows(rows: list[dict[str, Any]], key: str) -> float:
+    return float(np.mean([float(row[key]) for row in rows]))
+
+
+def _build_comparison_row(name: str, rows: list[dict[str, Any]], weights: dict[str, float] | None = None) -> dict[str, Any]:
+    payload = {
+        "name": name,
+        "cv_log_loss": _mean_metric_from_rows(rows, "log_loss"),
+        "cv_brier": _mean_metric_from_rows(rows, "brier"),
+        "cv_accuracy": _mean_metric_from_rows(rows, "accuracy"),
+    }
+    if weights:
+        payload["weights"] = {model_name: float(weight) for model_name, weight in weights.items()}
+    return payload
+
+
+def _print_model_comparison(rows: list[dict[str, Any]], winner_name: str) -> None:
+    print("Model              CV Log-Loss   CV Brier   CV Accuracy")
+    print("-------------------------------------------------------")
+    for row in rows:
+        marker = "  "
+        if row["name"] == winner_name:
+            marker = "* "
+        print(
+            f"{row['name']:<18}{row['cv_log_loss']:.3f}        "
+            f"{row['cv_brier']:.3f}       {row['cv_accuracy']:.3f} {marker}".rstrip()
+        )
+
+
+def _confidence_from_probability_map(probability_map: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    if not probability_map:
+        return np.array([], dtype=float), np.array([], dtype=object)
+    stacked = np.vstack([np.asarray(values, dtype=float) for values in probability_map.values()])
+    if stacked.shape[0] == 1:
+        agreement_gap = np.zeros(stacked.shape[1], dtype=float)
+    else:
+        agreement_gap = stacked.max(axis=0) - stacked.min(axis=0)
+    confidence = np.where(
+        agreement_gap < 0.05,
+        "HIGH",
+        np.where(agreement_gap < 0.12, "MEDIUM", "LOW"),
+    )
+    return 1.0 - agreement_gap, confidence
+
+
+def _build_tuning_folds(train_df: pd.DataFrame) -> list[dict[str, Any]]:
+    folds = _build_temporal_cv_folds(
+        train_df,
+        target_folds=TUNING_FOLDS,
+        min_train_rows=max(300, min(2000, max(300, len(train_df) // 4))),
+        min_test_rows=max(75, min(300, max(75, len(train_df) // 12))),
+    )
+    if folds:
+        return folds
+
+    train_core, val_core = _split_train_validation(train_df)
+    if train_core.empty or val_core.empty:
+        return []
+    return [
+        {
+            "fold": 1,
+            "train_df": train_core,
+            "test_df": val_core,
+            "train_rows": int(len(train_core)),
+            "test_rows": int(len(val_core)),
+            "train_date_min": train_core["match_date"].min().strftime("%Y-%m-%d"),
+            "train_date_max": train_core["match_date"].max().strftime("%Y-%m-%d"),
+            "test_date_min": val_core["match_date"].min().strftime("%Y-%m-%d"),
+            "test_date_max": val_core["match_date"].max().strftime("%Y-%m-%d"),
+        }
+    ]
+
+
+def _create_optuna_study(saved_params: dict[str, Any]) -> Any:
+    study = optuna.create_study(
+        direction="minimize",
+        sampler=optuna.samplers.TPESampler(seed=42),
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5),
+    )
+    if saved_params:
+        study.enqueue_trial(saved_params)
+    return study
+
+
+def _fit_optuna_catboost(
+    *,
+    tour: str,
+    train_df: pd.DataFrame,
+    n_trials: int,
+    fast: bool,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if optuna is None or CatBoostClassifier is None or n_trials <= 0:
+        return {}, {}
+
+    tuning_folds = _build_tuning_folds(train_df)
+    if not tuning_folds:
+        return {}, {}
+
+    saved_params = _load_best_params(tour, "catboost")
+    allowed_keys = {"learning_rate", "depth", "l2_leaf_reg", "iterations", "border_count"}
+    queued_params = {k: v for k, v in saved_params.items() if k in allowed_keys}
+
+    def objective(trial: "optuna.Trial") -> float:
+        params = {
+            "iterations": trial.suggest_int("iterations", 200, 500 if fast else 1000),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "depth": trial.suggest_int("depth", 4, 10),
+            "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 10.0),
+            "border_count": trial.suggest_int("border_count", 32, 255),
+            "random_seed": 42,
+            "loss_function": "Logloss",
+            "eval_metric": "Logloss",
+            "verbose": False,
+            # CatBoost sklearn wrapper exposes thread_count, not n_jobs.
+            "thread_count": 1,
+        }
+
+        fold_losses: list[float] = []
+        for step, fold in enumerate(tuning_folds, start=1):
+            x_fold_train, y_fold_train, x_fold_val, y_fold_val, _, cat_cols = _prepare_frames(
+                fold["train_df"],
+                fold["test_df"],
+            )
+            model = CatBoostClassifier(**params)
+            model.fit(
+                x_fold_train,
+                y_fold_train,
+                cat_features=cat_cols,
+                eval_set=(x_fold_val, y_fold_val),
+                use_best_model=True,
+                early_stopping_rounds=50,
+            )
+            preds = model.predict_proba(x_fold_val)[:, 1]
+            fold_loss = float(log_loss(y_fold_val, preds, labels=[0, 1]))
+            fold_losses.append(fold_loss)
+            trial.report(float(np.mean(fold_losses)), step=step)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
+
+        return float(np.mean(fold_losses))
+
+    study = _create_optuna_study(queued_params)
     study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-    return study.best_params if study.best_trial else {}
+    completed_trials = [trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE]
+    if not completed_trials:
+        return {}, {}
+
+    best_trial = study.best_trial
+    best_params = {k: v for k, v in best_trial.params.items() if k in allowed_keys}
+    path = _save_best_params(tour, "catboost", best_trial.value, best_params)
+    print(
+        f"[Optuna][{tour.upper()}][catboost] best log_loss={best_trial.value:.6f} "
+        f"params={json.dumps(best_params, sort_keys=True)} saved={path}"
+    )
+    return best_params, {
+        "score": float(best_trial.value),
+        "params": best_params,
+        "path": str(path),
+        "trials": int(len(study.trials)),
+    }
+
+
+def _fit_optuna_xgboost(
+    *,
+    tour: str,
+    train_df: pd.DataFrame,
+    n_trials: int,
+    fast: bool,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if optuna is None or XGBClassifier is None or n_trials <= 0:
+        return {}, {}
+
+    tuning_folds = _build_tuning_folds(train_df)
+    if not tuning_folds:
+        return {}, {}
+
+    saved_params = _load_best_params(tour, "xgboost")
+    allowed_keys = {
+        "learning_rate",
+        "max_depth",
+        "n_estimators",
+        "subsample",
+        "colsample_bytree",
+        "min_child_weight",
+    }
+    queued_params = {k: v for k, v in saved_params.items() if k in allowed_keys}
+
+    def objective(trial: "optuna.Trial") -> float:
+        params = {
+            "n_estimators": trial.suggest_int("n_estimators", 100, 300 if fast else 800),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "max_depth": trial.suggest_int("max_depth", 3, 10),
+            "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+            "eval_metric": "logloss",
+            "random_state": 42,
+            "n_jobs": -1,
+        }
+
+        fold_losses: list[float] = []
+        for step, fold in enumerate(tuning_folds, start=1):
+            x_fold_train, y_fold_train, x_fold_val, y_fold_val, _, cat_cols = _prepare_frames(
+                fold["train_df"],
+                fold["test_df"],
+            )
+            x_fold_train_xgb, x_fold_val_xgb = _to_xgb_matrix(x_fold_train, x_fold_val, cat_cols)
+            model = XGBClassifier(**{**params, "early_stopping_rounds": 50})
+            model.fit(
+                x_fold_train_xgb,
+                y_fold_train,
+                eval_set=[(x_fold_val_xgb, y_fold_val)],
+                verbose=False,
+            )
+            preds = model.predict_proba(x_fold_val_xgb)[:, 1]
+            fold_loss = float(log_loss(y_fold_val, preds, labels=[0, 1]))
+            fold_losses.append(fold_loss)
+            trial.report(float(np.mean(fold_losses)), step=step)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
+
+        return float(np.mean(fold_losses))
+
+    study = _create_optuna_study(queued_params)
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    completed_trials = [trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE]
+    if not completed_trials:
+        return {}, {}
+
+    best_trial = study.best_trial
+    best_params = {k: v for k, v in best_trial.params.items() if k in allowed_keys}
+    path = _save_best_params(tour, "xgboost", best_trial.value, best_params)
+    print(
+        f"[Optuna][{tour.upper()}][xgboost] best log_loss={best_trial.value:.6f} "
+        f"params={json.dumps(best_params, sort_keys=True)} saved={path}"
+    )
+    return best_params, {
+        "score": float(best_trial.value),
+        "params": best_params,
+        "path": str(path),
+        "trials": int(len(study.trials)),
+    }
+
+
+def _fit_optuna_lightgbm(
+    *,
+    tour: str,
+    train_df: pd.DataFrame,
+    n_trials: int,
+    fast: bool,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if optuna is None or LGBMClassifier is None or n_trials <= 0:
+        return {}, {}
+
+    tuning_folds = _build_tuning_folds(train_df)
+    if not tuning_folds:
+        return {}, {}
+
+    saved_params = _load_best_params(tour, "lgbm")
+    allowed_keys = {
+        "learning_rate",
+        "max_depth",
+        "n_estimators",
+        "subsample",
+        "colsample_bytree",
+        "min_child_weight",
+    }
+    queued_params = {k: v for k, v in saved_params.items() if k in allowed_keys}
+
+    def objective(trial: "optuna.Trial") -> float:
+        params = {
+            "n_estimators": trial.suggest_int("n_estimators", 100, 300 if fast else 800),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "max_depth": trial.suggest_int("max_depth", 3, 10),
+            "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+            "objective": "binary",
+            "random_state": 42,
+            "n_jobs": -1,
+            "verbosity": -1,
+        }
+
+        fold_losses: list[float] = []
+        for step, fold in enumerate(tuning_folds, start=1):
+            matrices = _build_model_matrices(fold["train_df"], fold["test_df"])
+            model = LGBMClassifier(**params)
+            fit_kwargs: dict[str, Any] = {}
+            if lgbm_early_stopping is not None:
+                fit_kwargs["callbacks"] = [lgbm_early_stopping(50, verbose=False)]
+            model.fit(
+                matrices["x_train_tab"],
+                matrices["y_train"],
+                eval_set=[(matrices["x_eval_tab"], matrices["y_eval"])],
+                **fit_kwargs,
+            )
+            preds = model.predict_proba(matrices["x_eval_tab"])[:, 1]
+            fold_loss = float(log_loss(matrices["y_eval"], preds, labels=[0, 1]))
+            fold_losses.append(fold_loss)
+            trial.report(float(np.mean(fold_losses)), step=step)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
+
+        return float(np.mean(fold_losses))
+
+    study = _create_optuna_study(queued_params)
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    completed_trials = [trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE]
+    if not completed_trials:
+        return {}, {}
+
+    best_trial = study.best_trial
+    best_params = {k: v for k, v in best_trial.params.items() if k in allowed_keys}
+    path = _save_best_params(tour, "lgbm", best_trial.value, best_params)
+    print(
+        f"[Optuna][{tour.upper()}][lgbm] best log_loss={best_trial.value:.6f} "
+        f"params={json.dumps(best_params, sort_keys=True)} saved={path}"
+    )
+    return best_params, {
+        "score": float(best_trial.value),
+        "params": best_params,
+        "path": str(path),
+        "trials": int(len(study.trials)),
+    }
+
+
+def _build_comparison_folds(df: pd.DataFrame, target_folds: int) -> list[dict[str, Any]]:
+    folds = _build_temporal_cv_folds(
+        df,
+        target_folds=target_folds,
+        min_train_rows=max(300, min(2000, max(300, len(df) // 4))),
+        min_test_rows=max(75, min(300, max(75, len(df) // 12))),
+    )
+    if folds:
+        return folds
+
+    train_core, val_core = _split_train_validation(df)
+    if train_core.empty or val_core.empty:
+        return []
+    return [
+        {
+            "fold": 1,
+            "train_df": train_core,
+            "test_df": val_core,
+            "train_rows": int(len(train_core)),
+            "test_rows": int(len(val_core)),
+            "train_date_min": train_core["match_date"].min().strftime("%Y-%m-%d"),
+            "train_date_max": train_core["match_date"].max().strftime("%Y-%m-%d"),
+            "test_date_min": val_core["match_date"].min().strftime("%Y-%m-%d"),
+            "test_date_max": val_core["match_date"].max().strftime("%Y-%m-%d"),
+        }
+    ]
+
+
+def _run_temporal_cv(
+    tour: str,
+    train_df: pd.DataFrame,
+    *,
+    model_params: dict[str, dict[str, Any]],
+    target_folds: int,
+) -> dict[str, Any]:
+    folds = _build_comparison_folds(train_df, target_folds=target_folds)
+    if not folds:
+        return {
+            "enabled": False,
+            "requested_folds": int(target_folds),
+            "completed_folds": 0,
+            "message": "Insufficient data for temporal CV.",
+            "folds": [],
+            "summary": {},
+            "comparison_rows": [],
+            "winner_row": None,
+        }
+
+    base_rows: dict[str, list[dict[str, Any]]] = {model_name: [] for model_name in model_params}
+    fold_predictions: list[dict[str, Any]] = []
+    fold_metadata: list[dict[str, Any]] = []
+
+    for fold in folds:
+        matrices = _build_model_matrices(fold["train_df"], fold["test_df"])
+        y_eval = matrices["y_eval"]
+        per_model_probs: dict[str, np.ndarray] = {}
+        fold_row: dict[str, Any] = {
+            "fold": fold["fold"],
+            "train_rows": fold["train_rows"],
+            "test_rows": fold["test_rows"],
+            "train_date_min": fold["train_date_min"],
+            "train_date_max": fold["train_date_max"],
+            "test_date_min": fold["test_date_min"],
+            "test_date_max": fold["test_date_max"],
+        }
+
+        for model_name, params in model_params.items():
+            final_params, _ = _fit_selection_model(model_name, params, fold["train_df"])
+            model = _fit_model(model_name, final_params, matrices)
+            probs = _predict_model_proba(model_name, model, matrices)
+            metrics = _metric_pack(y_eval, probs)
+            per_model_probs[model_name] = probs
+            base_rows[model_name].append(metrics)
+            fold_row[f"{model_name}_log_loss"] = metrics["log_loss"]
+            fold_row[f"{model_name}_brier"] = metrics["brier"]
+            fold_row[f"{model_name}_accuracy"] = metrics["accuracy"]
+
+        fold_predictions.append({"y_true": y_eval.to_numpy(), "probabilities": per_model_probs})
+        fold_metadata.append(fold_row)
+
+    comparison_rows = [_build_comparison_row(model_name, rows) for model_name, rows in base_rows.items()]
+    ranked_models = [row["name"] for row in sorted(comparison_rows, key=lambda row: row["cv_log_loss"])]
+
+    ensemble_candidates: list[tuple[str, dict[str, float]]] = []
+    if {"catboost", "xgboost"}.issubset(model_params):
+        ensemble_candidates.append(("cat85_xgb15", {"catboost": 0.85, "xgboost": 0.15}))
+        ensemble_candidates.append(("cat60_xgb40", {"catboost": 3 / 5, "xgboost": 2 / 5}))
+    if {"catboost", "lgbm"}.issubset(model_params):
+        ensemble_candidates.append(("cat70_lgbm30", {"catboost": 0.70, "lgbm": 0.30}))
+    if len(ranked_models) >= 2:
+        ensemble_candidates.append(("top2_equal", {name: 0.5 for name in ranked_models[:2]}))
+    if len(ranked_models) >= 3:
+        ensemble_candidates.append(("top3_equal", {name: 1.0 / 3.0 for name in ranked_models[:3]}))
+
+    for candidate_name, weights in ensemble_candidates:
+        candidate_rows: list[dict[str, Any]] = []
+        for idx, fold_data in enumerate(fold_predictions):
+            ensemble_probs = np.zeros_like(next(iter(fold_data["probabilities"].values())), dtype=float)
+            for model_name, weight in weights.items():
+                ensemble_probs += float(weight) * fold_data["probabilities"][model_name]
+            metrics = _metric_pack(pd.Series(fold_data["y_true"]), ensemble_probs)
+            candidate_rows.append(metrics)
+            fold_metadata[idx][f"{candidate_name}_log_loss"] = metrics["log_loss"]
+            fold_metadata[idx][f"{candidate_name}_brier"] = metrics["brier"]
+            fold_metadata[idx][f"{candidate_name}_accuracy"] = metrics["accuracy"]
+        comparison_rows.append(_build_comparison_row(candidate_name, candidate_rows, weights=weights))
+
+    comparison_rows = sorted(comparison_rows, key=lambda row: row["cv_log_loss"])
+    winner_row = comparison_rows[0]
+
+    summary: dict[str, Any] = {}
+    folds_df = pd.DataFrame(fold_metadata)
+    for row in comparison_rows:
+        name = row["name"]
+        for metric_name in ("log_loss", "brier", "accuracy"):
+            col = f"{name}_{metric_name}"
+            if col in folds_df.columns:
+                summary[f"{col}_mean"] = float(folds_df[col].mean())
+                summary[f"{col}_std"] = float(folds_df[col].std(ddof=0))
+
+    _print_model_comparison(comparison_rows, winner_row["name"])
+    print(
+        f"[CV][{tour.upper()}] winner={winner_row['name']} "
+        f"log_loss={winner_row['cv_log_loss']:.6f} "
+        f"weights={json.dumps(winner_row.get('weights', {winner_row['name']: 1.0}), sort_keys=True)}"
+    )
+
+    return {
+        "enabled": True,
+        "requested_folds": int(target_folds),
+        "completed_folds": int(len(fold_metadata)),
+        "message": "Temporal CV completed.",
+        "folds": fold_metadata,
+        "summary": summary,
+        "comparison_rows": comparison_rows,
+        "winner_row": winner_row,
+    }
 
 
 def _train_and_score_split(
+    tour: str,
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
     *,
     optuna_trials: int,
     use_optuna: bool,
     fast: bool,
+    cv_folds: int = DEFAULT_TEMPORAL_CV_FOLDS,
 ) -> dict[str, Any]:
+    available_models = _available_model_names()
+    if not available_models:
+        raise RuntimeError("No supported models are available for training.")
+
+    tuning_report: dict[str, Any] = {"catboost": None, "xgboost": None, "lgbm": None}
+    tuned_params: dict[str, dict[str, Any]] = {}
     train_core, val_core = _split_train_validation(train_df)
+    should_tune = use_optuna and optuna is not None and optuna_trials > 0 and len(train_core) > 500 and len(val_core) > 100
 
-    x_train, y_train, x_test, y_test, feature_cols, cat_cols = _prepare_frames(train_df, test_df)
-    x_train_core, y_train_core, x_val_core, y_val_core, _, _ = _prepare_frames(train_core, val_core)
-    num_cols = [c for c in feature_cols if c not in cat_cols]
-
-    cat_params = {
-        "iterations": 500 if fast else 1000,
-        "learning_rate": 0.05,
-        "depth": 6,
-        "l2_leaf_reg": 3,
-        "loss_function": "Logloss",
-        "eval_metric": "Logloss",
-        "early_stopping_rounds": 50,
-        "verbose": False,
-        "random_seed": 42,
-    }
-
-    xgb_params = {
-        "n_estimators": 500 if fast else 1000,
-        "learning_rate": 0.05,
-        "max_depth": 6,
-        "reg_lambda": 3,
-        "eval_metric": "logloss",
-        "n_jobs": -1,
-        "random_state": 42,
-        "early_stopping_rounds": 50,
-    }
-
-    tuned_cat: dict[str, Any] = {}
-    tuned_xgb: dict[str, Any] = {}
-
-    if use_optuna and optuna is not None and optuna_trials > 0 and len(train_core) > 500 and len(val_core) > 100:
-        tuned_cat = _fit_optuna_catboost(
-            x_train_core,
-            y_train_core,
-            x_val_core,
-            y_val_core,
-            cat_cols,
-            optuna_trials,
-            fast,
+    if should_tune and "catboost" in available_models:
+        tuned_params["catboost"], tuning_report["catboost"] = _fit_optuna_catboost(
+            tour=tour,
+            train_df=train_df,
+            n_trials=optuna_trials,
+            fast=fast,
+        )
+    if should_tune and "xgboost" in available_models:
+        tuned_params["xgboost"], tuning_report["xgboost"] = _fit_optuna_xgboost(
+            tour=tour,
+            train_df=train_df,
+            n_trials=optuna_trials,
+            fast=fast,
+        )
+    if should_tune and "lgbm" in available_models:
+        tuned_params["lgbm"], tuning_report["lgbm"] = _fit_optuna_lightgbm(
+            tour=tour,
+            train_df=train_df,
+            n_trials=optuna_trials,
+            fast=fast,
         )
 
-        x_train_core_xgb, x_val_core_xgb = _to_xgb_matrix(x_train_core, x_val_core, cat_cols)
-        tuned_xgb = _fit_optuna_xgboost(
-            x_train_core_xgb,
-            y_train_core,
-            x_val_core_xgb,
-            y_val_core,
-            optuna_trials,
-            fast,
+    model_params = {
+        model_name: _build_model_params(
+            tour,
+            model_name,
+            fast=fast,
+            tuned_params=tuned_params.get(model_name),
         )
-
-    cat_params.update({k: v for k, v in tuned_cat.items() if k in {"learning_rate", "depth", "l2_leaf_reg"}})
-    xgb_params.update(
-        {
-            k: v
-            for k, v in tuned_xgb.items()
-            if k in {"learning_rate", "max_depth", "reg_lambda", "subsample", "colsample_bytree"}
+        for model_name in available_models
+    }
+    temporal_cv = _run_temporal_cv(
+        tour,
+        train_df,
+        model_params=model_params,
+        target_folds=cv_folds,
+    )
+    winner_row = temporal_cv.get("winner_row")
+    if winner_row is None:
+        fallback_model = available_models[0]
+        winner_row = {
+            "name": fallback_model,
+            "weights": {fallback_model: 1.0},
+            "cv_log_loss": math.nan,
+            "cv_brier": math.nan,
+            "cv_accuracy": math.nan,
         }
-    )
+    winner_weights = dict(winner_row.get("weights") or {winner_row["name"]: 1.0})
 
-    cat_selection_model = CatBoostClassifier(**cat_params)
-    cat_selection_model.fit(
-        x_train_core,
-        y_train_core,
-        cat_features=cat_cols,
-        eval_set=(x_val_core, y_val_core),
-        use_best_model=True,
-    )
-    cat_final_iterations = _choose_iteration_count(cat_selection_model, cat_params["iterations"], "best_iteration_")
-    cat_final_params = {k: v for k, v in cat_params.items() if k != "early_stopping_rounds"}
-    cat_final_params["iterations"] = cat_final_iterations
+    matrices = _build_model_matrices(train_df, test_df)
+    final_models: dict[str, Any] = {}
+    final_params: dict[str, dict[str, Any]] = {}
+    selection_details: dict[str, Any] = {}
+    probabilities: dict[str, np.ndarray] = {}
+    metrics: dict[str, Any] = {}
 
-    cat_model = CatBoostClassifier(**cat_final_params)
-    cat_model.fit(x_train, y_train, cat_features=cat_cols, verbose=False)
+    for model_name in available_models:
+        resolved_params, resolved_selection = _fit_selection_model(model_name, model_params[model_name], train_df)
+        model = _fit_model(model_name, resolved_params, matrices)
+        probs = _predict_model_proba(model_name, model, matrices)
+        final_models[model_name] = model
+        final_params[model_name] = resolved_params
+        selection_details[model_name] = resolved_selection
+        probabilities[model_name] = probs
+        metrics[model_name] = _metric_pack(matrices["y_eval"], probs)
 
-    x_train_core_xgb, x_val_core_xgb = _to_xgb_matrix(x_train_core, x_val_core, cat_cols)
-    xgb_selection_model = XGBClassifier(**xgb_params)
-    xgb_selection_model.fit(x_train_core_xgb, y_train_core, eval_set=[(x_val_core_xgb, y_val_core)], verbose=False)
-    xgb_final_estimators = _choose_iteration_count(
-        xgb_selection_model,
-        xgb_params["n_estimators"],
-        "best_iteration",
-    )
-
-    x_train_xgb, x_test_xgb = _to_xgb_matrix(x_train, x_test, cat_cols)
-    xgb_final_params = {k: v for k, v in xgb_params.items() if k != "early_stopping_rounds"}
-    xgb_final_params["n_estimators"] = xgb_final_estimators
-    xgb_model = XGBClassifier(**xgb_final_params)
-    xgb_model.fit(x_train_xgb, y_train, verbose=False)
-
-    cat_probs = cat_model.predict_proba(x_test)[:, 1]
-    xgb_probs = xgb_model.predict_proba(x_test_xgb)[:, 1]
-    ensemble_probs = 0.6 * cat_probs + 0.4 * xgb_probs
-    calibration_ece, calibration_rows = _calibration_metrics(y_test.to_numpy(), ensemble_probs)
+    ensemble_probs = np.zeros_like(next(iter(probabilities.values())), dtype=float)
+    for model_name, weight in winner_weights.items():
+        if model_name not in probabilities:
+            continue
+        ensemble_probs += float(weight) * probabilities[model_name]
+    calibration_ece, calibration_rows = _calibration_metrics(matrices["y_eval"].to_numpy(), ensemble_probs)
+    metrics["ensemble"] = _metric_pack(matrices["y_eval"], ensemble_probs)
+    metrics["ensemble_calibration_ece"] = calibration_ece
 
     return {
-        "models": {
-            "catboost": cat_model,
-            "xgboost": xgb_model,
-        },
-        "feature_cols": feature_cols,
-        "cat_cols": cat_cols,
-        "num_cols": num_cols,
-        "x_train": x_train,
-        "x_test": x_test,
-        "x_train_xgb": x_train_xgb,
-        "x_test_xgb": x_test_xgb,
-        "y_test": y_test,
+        "models": final_models,
+        "feature_cols": matrices["feature_cols"],
+        "cat_cols": matrices["cat_cols"],
+        "num_cols": matrices["num_cols"],
+        "x_train": matrices["x_train_cat"],
+        "x_test": matrices["x_eval_cat"],
+        "x_train_xgb": matrices["x_train_tab"],
+        "x_test_xgb": matrices["x_eval_tab"],
+        "y_test": matrices["y_eval"],
         "probabilities": {
-            "catboost": cat_probs,
-            "xgboost": xgb_probs,
+            **probabilities,
             "ensemble": ensemble_probs,
         },
-        "metrics": {
-            "catboost": _metric_pack(y_test, cat_probs),
-            "xgboost": _metric_pack(y_test, xgb_probs),
-            "ensemble": _metric_pack(y_test, ensemble_probs),
-            "ensemble_calibration_ece": calibration_ece,
-        },
+        "metrics": metrics,
         "calibration_rows": calibration_rows,
-        "params": {
-            "catboost": cat_final_params,
-            "xgboost": xgb_final_params,
-        },
-        "selection": {
-            "catboost_best_iterations": int(cat_final_iterations),
-            "xgboost_best_iterations": int(xgb_final_estimators),
-        },
+        "params": final_params,
+        "selection": selection_details,
+        "tuning": tuning_report,
         "split_summary": {
             "train": _target_summary(train_df),
             "validation": _target_summary(val_core),
             "test": _target_summary(test_df),
+        },
+        "temporal_cv": temporal_cv,
+        "model_comparison": temporal_cv.get("comparison_rows", []),
+        "ensemble_config": {
+            "winner": winner_row["name"],
+            "weights": winner_weights,
+            "cv_log_loss": float(winner_row.get("cv_log_loss", math.nan)),
+            "cv_brier": float(winner_row.get("cv_brier", math.nan)),
+            "cv_accuracy": float(winner_row.get("cv_accuracy", math.nan)),
         },
     }
 
@@ -782,92 +1624,16 @@ def _build_temporal_cv_folds(
     return folds
 
 
-def _run_temporal_cv(
-    df: pd.DataFrame,
-    *,
-    fast: bool,
-    target_folds: int,
-) -> dict[str, Any]:
-    folds = _build_temporal_cv_folds(df, target_folds=target_folds)
-    if not folds:
-        return {
-            "enabled": False,
-            "requested_folds": int(target_folds),
-            "completed_folds": 0,
-            "message": "Insufficient data for temporal CV.",
-            "folds": [],
-            "summary": {},
-        }
-
-    rows: list[dict[str, Any]] = []
-    for fold in folds:
-        result = _train_and_score_split(
-            fold["train_df"],
-            fold["test_df"],
-            optuna_trials=0,
-            use_optuna=False,
-            fast=fast,
-        )
-        rows.append(
-            {
-                "fold": fold["fold"],
-                "train_rows": fold["train_rows"],
-                "test_rows": fold["test_rows"],
-                "train_date_min": fold["train_date_min"],
-                "train_date_max": fold["train_date_max"],
-                "test_date_min": fold["test_date_min"],
-                "test_date_max": fold["test_date_max"],
-                "catboost_accuracy": result["metrics"]["catboost"]["accuracy"],
-                "catboost_log_loss": result["metrics"]["catboost"]["log_loss"],
-                "xgboost_accuracy": result["metrics"]["xgboost"]["accuracy"],
-                "xgboost_log_loss": result["metrics"]["xgboost"]["log_loss"],
-                "ensemble_accuracy": result["metrics"]["ensemble"]["accuracy"],
-                "ensemble_log_loss": result["metrics"]["ensemble"]["log_loss"],
-                "ensemble_brier": result["metrics"]["ensemble"]["brier"],
-                "ensemble_ece": result["metrics"]["ensemble"]["ece"],
-            }
-        )
-
-    folds_df = pd.DataFrame(rows)
-    summary: dict[str, Any] = {}
-    for metric_col in [
-        "catboost_accuracy",
-        "catboost_log_loss",
-        "xgboost_accuracy",
-        "xgboost_log_loss",
-        "ensemble_accuracy",
-        "ensemble_log_loss",
-        "ensemble_brier",
-        "ensemble_ece",
-    ]:
-        summary[f"{metric_col}_mean"] = float(folds_df[metric_col].mean())
-        summary[f"{metric_col}_std"] = float(folds_df[metric_col].std(ddof=0))
-
-    return {
-        "enabled": True,
-        "requested_folds": int(target_folds),
-        "completed_folds": int(len(rows)),
-        "message": "Temporal CV completed.",
-        "folds": rows,
-        "summary": summary,
-    }
-
-
 def train_for_tour(
     tour: str,
     optuna_trials: int = OPTUNA_TRIALS,
-    use_optuna: bool = True,
+    use_optuna: bool = False,
     fast: bool = False,
     max_rows: int | None = None,
     train_cutoff: str = TRAIN_CUTOFF,
     fallback_latest_months: int = 3,
     cv_folds: int = DEFAULT_TEMPORAL_CV_FOLDS,
 ) -> dict[str, Any]:
-    if CatBoostClassifier is None or XGBClassifier is None:
-        raise RuntimeError(
-            "CatBoost and/or XGBoost are not installed. Run: python -m pip install catboost xgboost optuna"
-        )
-
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
     df = _load_features(tour)
@@ -880,30 +1646,28 @@ def train_for_tour(
         fallback_latest_months=fallback_latest_months,
     )
     split_result = _train_and_score_split(
-        train_df,
-        test_df,
+        tour=tour,
+        train_df=train_df,
+        test_df=test_df,
         optuna_trials=optuna_trials,
         use_optuna=use_optuna,
         fast=fast,
+        cv_folds=cv_folds,
     )
-    temporal_cv = _run_temporal_cv(df, fast=fast, target_folds=cv_folds)
+    temporal_cv = split_result["temporal_cv"]
 
-    cat_model = split_result["models"]["catboost"]
-    xgb_model = split_result["models"]["xgboost"]
     feature_cols = split_result["feature_cols"]
     cat_cols = split_result["cat_cols"]
     num_cols = split_result["num_cols"]
     x_train = split_result["x_train"]
     x_train_xgb = split_result["x_train_xgb"]
-    y_test = split_result["y_test"]
-    cat_probs = split_result["probabilities"]["catboost"]
-    xgb_probs = split_result["probabilities"]["xgboost"]
     ensemble_probs = split_result["probabilities"]["ensemble"]
     calibration_rows = split_result["calibration_rows"]
-    cat_final_params = split_result["params"]["catboost"]
-    xgb_final_params = split_result["params"]["xgboost"]
-    cat_final_iterations = split_result["selection"]["catboost_best_iterations"]
-    xgb_final_estimators = split_result["selection"]["xgboost_best_iterations"]
+    probabilities = split_result["probabilities"]
+    final_params = split_result["params"]
+    ensemble_config = split_result["ensemble_config"]
+    model_comparison = split_result["model_comparison"]
+    tuning_report = split_result.get("tuning", {})
 
     preprocess_payload = {
         "feature_cols": feature_cols,
@@ -917,47 +1681,61 @@ def train_for_tour(
     }
     preprocess_path = MODELS_DIR / f"preprocess_{tour}.json"
     _safe_json_dump(preprocess_path, preprocess_payload)
-    metrics_cat = split_result["metrics"]["catboost"]
-    metrics_xgb = split_result["metrics"]["xgboost"]
     metrics_ens = split_result["metrics"]["ensemble"]
     calibration_ece = split_result["metrics"]["ensemble_calibration_ece"]
     calibration_path = MODELS_DIR / f"calibration_{tour}.csv"
     pd.DataFrame(calibration_rows).to_csv(calibration_path, index=False)
     temporal_cv_path = MODELS_DIR / f"temporal_cv_{tour}.csv"
     pd.DataFrame(temporal_cv.get("folds", [])).to_csv(temporal_cv_path, index=False)
-
-    cat_path = MODELS_DIR / f"catboost_{tour}.cbm"
-    xgb_path = MODELS_DIR / f"xgboost_{tour}.json"
-    cat_model.save_model(cat_path)
-    xgb_model.save_model(xgb_path)
-
-    cat_importance = pd.DataFrame(
+    ensemble_config_path = _save_ensemble_config(
+        tour,
+        ensemble_config["winner"],
+        ensemble_config["weights"],
         {
-            "model": "catboost",
-            "feature": feature_cols,
-            "importance": cat_model.get_feature_importance(),
-        }
+            "cv_log_loss": ensemble_config["cv_log_loss"],
+            "cv_brier": ensemble_config["cv_brier"],
+            "cv_accuracy": ensemble_config["cv_accuracy"],
+        },
     )
 
-    xgb_importance = pd.DataFrame(
-        {
-            "model": "xgboost",
-            "feature": x_train_xgb.columns,
-            "importance": xgb_model.feature_importances_,
-        }
-    )
+    artifact_paths: dict[str, str] = {
+        "preprocess": str(preprocess_path),
+        "calibration": str(calibration_path),
+        "temporal_cv": str(temporal_cv_path),
+        "ensemble_config": str(ensemble_config_path),
+    }
+    importance_frames: list[pd.DataFrame] = []
+    for model_name, model in split_result["models"].items():
+        model_path = _model_artifact_path(tour, model_name)
+        _save_model_artifact(model_name, model, model_path)
+        artifact_paths[f"{model_name}_model"] = str(model_path)
+        feature_names = feature_cols if model_name == "catboost" else list(x_train_xgb.columns)
+        importance = _feature_importance_rows(model_name, model, feature_names)
+        if not importance.empty:
+            importance_frames.append(importance)
 
     fi_path = MODELS_DIR / f"feature_importance_{tour}.csv"
-    pd.concat([cat_importance, xgb_importance], ignore_index=True).sort_values(
-        "importance", ascending=False
-    ).to_csv(fi_path, index=False)
+    if importance_frames:
+        pd.concat(importance_frames, ignore_index=True).sort_values("importance", ascending=False).to_csv(fi_path, index=False)
+    else:
+        pd.DataFrame(columns=["model", "feature", "importance"]).to_csv(fi_path, index=False)
+    artifact_paths["feature_importance"] = str(fi_path)
 
     pred_path = MODELS_DIR / f"test_predictions_{tour}.csv"
     pred_df = test_df[["match_key", "match_date", "p1_name", "p2_name", TARGET_COL]].copy()
-    pred_df["catboost_prob"] = cat_probs
-    pred_df["xgboost_prob"] = xgb_probs
+    for model_name in BASE_MODEL_ORDER:
+        pred_df[f"{model_name}_prob"] = probabilities.get(model_name, np.nan)
     pred_df["ensemble_prob"] = ensemble_probs
+    interval_payload = _build_prediction_interval_payload(split_result["y_test"], ensemble_probs)
+    interval_radius = float(interval_payload.get("residual_quantile", 0.0))
+    pred_df["ensemble_prob_lower"] = np.clip(ensemble_probs - interval_radius, 0.0, 1.0)
+    pred_df["ensemble_prob_upper"] = np.clip(ensemble_probs + interval_radius, 0.0, 1.0)
+    pred_df["ensemble_interval_width"] = pred_df["ensemble_prob_upper"] - pred_df["ensemble_prob_lower"]
     pred_df.to_csv(pred_path, index=False)
+    artifact_paths["predictions"] = str(pred_path)
+    uncertainty_path = MODELS_DIR / f"uncertainty_{tour}.json"
+    _safe_json_dump(uncertainty_path, interval_payload)
+    artifact_paths["uncertainty"] = str(uncertainty_path)
 
     report = {
         "tour": tour,
@@ -970,28 +1748,29 @@ def train_for_tour(
         "split_summary": split_result["split_summary"],
         "optuna_trials_requested": int(optuna_trials) if use_optuna else 0,
         "optuna_trials_used": int(optuna_trials) if use_optuna and optuna is not None else 0,
-        "catboost_params": cat_final_params,
-        "xgboost_params": xgb_final_params,
+        "catboost_params": final_params.get("catboost"),
+        "xgboost_params": final_params.get("xgboost"),
+        "lgbm_params": final_params.get("lgbm"),
+        "rf_params": final_params.get("rf"),
+        "elasticnet_params": final_params.get("elasticnet"),
+        "logreg_params": final_params.get("logreg"),
         "selection": split_result["selection"],
-        "metrics": {
-            "catboost": metrics_cat,
-            "xgboost": metrics_xgb,
-            "ensemble": metrics_ens,
-            "ensemble_calibration_ece": calibration_ece,
+        "best_params_files": {
+            "catboost": str(_best_params_path(tour, "catboost")),
+            "xgboost": str(_best_params_path(tour, "xgboost")),
+            "lgbm": str(_best_params_path(tour, "lgbm")),
         },
+        "tuning": tuning_report,
+        "metrics": split_result["metrics"],
+        "prediction_interval": interval_payload,
+        "model_comparison": model_comparison,
+        "ensemble_winner": ensemble_config["winner"],
+        "ensemble_config": ensemble_config,
         "temporal_cv": {
             **temporal_cv,
             "cv_metrics_file": str(temporal_cv_path),
         },
-        "artifacts": {
-            "catboost_model": str(cat_path),
-            "xgboost_model": str(xgb_path),
-            "preprocess": str(preprocess_path),
-            "feature_importance": str(fi_path),
-            "calibration": str(calibration_path),
-            "temporal_cv": str(temporal_cv_path),
-            "predictions": str(pred_path),
-        },
+        "artifacts": artifact_paths,
     }
 
     report_path = MODELS_DIR / f"model_report_{tour}.json"
@@ -1003,7 +1782,7 @@ def train_for_tour(
 def train_models(
     tours: tuple[str, ...] = ("atp", "wta"),
     optuna_trials: int = OPTUNA_TRIALS,
-    use_optuna: bool = True,
+    use_optuna: bool = False,
     fast: bool = False,
     max_rows: int | None = None,
     train_cutoff: str = TRAIN_CUTOFF,
@@ -1026,6 +1805,7 @@ def train_models(
 
     rows = []
     for tour, rep in results.items():
+        winner_name = rep.get("ensemble_winner")
         rows.append(
             {
                 "trained_at": rep["trained_at"],
@@ -1034,17 +1814,29 @@ def train_models(
                 "split_mode": rep["split_mode"],
                 "rows_train": rep["rows_train"],
                 "rows_test": rep["rows_test"],
-                "catboost_accuracy": rep["metrics"]["catboost"]["accuracy"],
-                "catboost_log_loss": rep["metrics"]["catboost"]["log_loss"],
-                "xgboost_accuracy": rep["metrics"]["xgboost"]["accuracy"],
-                "xgboost_log_loss": rep["metrics"]["xgboost"]["log_loss"],
+                "catboost_accuracy": rep["metrics"].get("catboost", {}).get("accuracy"),
+                "catboost_log_loss": rep["metrics"].get("catboost", {}).get("log_loss"),
+                "xgboost_accuracy": rep["metrics"].get("xgboost", {}).get("accuracy"),
+                "xgboost_log_loss": rep["metrics"].get("xgboost", {}).get("log_loss"),
+                "lgbm_accuracy": rep["metrics"].get("lgbm", {}).get("accuracy"),
+                "lgbm_log_loss": rep["metrics"].get("lgbm", {}).get("log_loss"),
+                "rf_accuracy": rep["metrics"].get("rf", {}).get("accuracy"),
+                "rf_log_loss": rep["metrics"].get("rf", {}).get("log_loss"),
+                "elasticnet_accuracy": rep["metrics"].get("elasticnet", {}).get("accuracy"),
+                "elasticnet_log_loss": rep["metrics"].get("elasticnet", {}).get("log_loss"),
+                "logreg_accuracy": rep["metrics"].get("logreg", {}).get("accuracy"),
+                "logreg_log_loss": rep["metrics"].get("logreg", {}).get("log_loss"),
                 "ensemble_accuracy": rep["metrics"]["ensemble"]["accuracy"],
                 "ensemble_log_loss": rep["metrics"]["ensemble"]["log_loss"],
                 "ensemble_ece": rep["metrics"]["ensemble_calibration_ece"],
+                "interval_confidence_level": rep.get("prediction_interval", {}).get("confidence_level"),
+                "interval_empirical_coverage": rep.get("prediction_interval", {}).get("empirical_coverage"),
+                "interval_mean_width": rep.get("prediction_interval", {}).get("mean_interval_width"),
+                "ensemble_winner": winner_name,
                 "temporal_cv_folds": rep.get("temporal_cv", {}).get("completed_folds", 0),
-                "temporal_cv_ensemble_accuracy_mean": rep.get("temporal_cv", {}).get("summary", {}).get("ensemble_accuracy_mean"),
-                "temporal_cv_ensemble_log_loss_mean": rep.get("temporal_cv", {}).get("summary", {}).get("ensemble_log_loss_mean"),
-                "temporal_cv_ensemble_ece_mean": rep.get("temporal_cv", {}).get("summary", {}).get("ensemble_ece_mean"),
+                "temporal_cv_winner_accuracy_mean": rep.get("temporal_cv", {}).get("summary", {}).get(f"{winner_name}_accuracy_mean") if winner_name else None,
+                "temporal_cv_winner_log_loss_mean": rep.get("temporal_cv", {}).get("summary", {}).get(f"{winner_name}_log_loss_mean") if winner_name else None,
+                "temporal_cv_winner_brier_mean": rep.get("temporal_cv", {}).get("summary", {}).get(f"{winner_name}_brier_mean") if winner_name else None,
             }
         )
 
@@ -1082,11 +1874,13 @@ def train_models(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train TennisBet CatBoost/XGBoost models")
-    parser.add_argument("--tours", default="atp,wta", help="Comma-separated tours, e.g. atp,wta")
+    parser = argparse.ArgumentParser(description="Train TennisBet multi-model ensemble")
+    parser.add_argument("--tours", nargs="+", default=["atp", "wta"], help="Tours to train, e.g. --tours atp wta")
+    parser.add_argument("--tune", action="store_true", help="Run full Optuna tuning before final training")
     parser.add_argument("--skip-optuna", action="store_true", help="Skip optuna tuning")
     parser.add_argument("--optuna-trials", type=int, default=OPTUNA_TRIALS)
     parser.add_argument("--fast", action="store_true", help="Use faster settings for iteration/testing")
+    parser.add_argument("--dry-run", action="store_true", help="Print resolved training configuration without fitting models")
     parser.add_argument("--max-rows", type=int, default=None, help="Optional cap on most recent rows per tour")
     parser.add_argument("--train-cutoff", type=str, default=TRAIN_CUTOFF, help="Temporal split cutoff (YYYY-MM-DD)")
     parser.add_argument(
@@ -1103,9 +1897,43 @@ def main() -> None:
     )
 
     args = parser.parse_args()
-    tours = tuple(t.strip() for t in args.tours.split(",") if t.strip())
-    use_optuna = not args.skip_optuna
+    tours = tuple(
+        part.strip()
+        for raw in args.tours
+        for part in str(raw).split(",")
+        if part.strip()
+    )
+    use_optuna = bool(args.tune and not args.skip_optuna)
     trial_count = 5 if args.fast and args.optuna_trials > 5 else args.optuna_trials
+
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "dry_run": True,
+                    "tours": list(tours),
+                    "tune": bool(args.tune),
+                    "use_optuna": use_optuna,
+                    "optuna_trials": int(trial_count),
+                    "fast": bool(args.fast),
+                    "max_rows": args.max_rows,
+                    "train_cutoff": args.train_cutoff,
+                    "fallback_latest_months": args.fallback_latest_months,
+                    "cv_folds": args.cv_folds,
+                    "stored_best_params": {
+                        tour: {
+                            "catboost": _load_best_params(tour, "catboost"),
+                            "xgboost": _load_best_params(tour, "xgboost"),
+                            "lgbm": _load_best_params(tour, "lgbm"),
+                        }
+                        for tour in tours
+                    },
+                    "stored_ensemble_configs": {tour: _load_ensemble_config(tour) for tour in tours},
+                },
+                indent=2,
+            )
+        )
+        return
 
     report = train_models(
         tours=tours,

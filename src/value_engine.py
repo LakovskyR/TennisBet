@@ -14,10 +14,13 @@ from config import (
     MAX_DAILY_BETS,
     MAX_DAILY_CAPITAL_PCT,
     MIN_BET_AMOUNT,
+    MIN_BOOKMAKER_COUNT,
     MIN_EDGE_THRESHOLD,
+    ODDS_HISTORY_FILE,
     ODDS_UPCOMING_FILE,
 )
 from src.player_aliases import canonicalize_player_name, load_player_aliases, normalize_player_name
+from src.sqlite_storage import load_odds_frame
 
 
 logger = logging.getLogger("value_engine")
@@ -41,9 +44,16 @@ def _load_predictions(path: Path) -> pd.DataFrame:
 
 
 def _load_odds(path: Path) -> pd.DataFrame:
-    if not path.exists() or path.stat().st_size == 0:
+    if path == ODDS_UPCOMING_FILE:
+        df = load_odds_frame(current_only=True, fallback_to_csv=False)
+    elif path == ODDS_HISTORY_FILE:
+        df = load_odds_frame(current_only=False, fallback_to_csv=False)
+    else:
+        if not path.exists() or path.stat().st_size == 0:
+            return pd.DataFrame()
+        df = pd.read_csv(path, low_memory=False)
+    if df.empty:
         return pd.DataFrame()
-    df = pd.read_csv(path, low_memory=False)
 
     if "player_1_resolved" not in df.columns:
         df["player_1_resolved"] = df.get("player_1")
@@ -63,6 +73,12 @@ def _load_odds(path: Path) -> pd.DataFrame:
         "player_2_id",
         "odds_p1",
         "odds_p2",
+        "bookmaker",
+        "bookmaker_count",
+        "aggregation_method",
+        "source_url",
+        "match_id",
+        "captured_at",
     ]
     for col in needed:
         if col not in df.columns:
@@ -93,24 +109,107 @@ def _join_predictions_with_odds(pred: pd.DataFrame, odds: pd.DataFrame) -> pd.Da
         except Exception:
             return text
 
-    odds_map_ids: dict[tuple[str, str, str], dict[str, Any]] = {}
-    odds_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+    odds_map_ids: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    odds_map: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for row in odds.to_dict(orient="records"):
         date_key = str(row.get("match_date"))
         id1 = _norm_player_id(row.get("player_1_id"))
         id2 = _norm_player_id(row.get("player_2_id"))
         if id1 and id2:
             id_key = (date_key, min(id1, id2), max(id1, id2))
-            if id_key not in odds_map_ids:
-                odds_map_ids[id_key] = row
+            odds_map_ids.setdefault(id_key, []).append(row)
         n1 = canonicalize_player_name(row.get("player_1_resolved") or row.get("player_1"), aliases)
         n2 = canonicalize_player_name(row.get("player_2_resolved") or row.get("player_2"), aliases)
         key = (date_key, min(n1, n2), max(n1, n2))
-        if key not in odds_map:
-            odds_map[key] = row
+        odds_map.setdefault(key, []).append(row)
+
+    def _bookmaker_count(row: dict[str, Any]) -> int:
+        value = pd.to_numeric(row.get("bookmaker_count"), errors="coerce")
+        if pd.notna(value) and float(value) > 0:
+            return int(float(value))
+        return 0
+
+    def _latest_candidates(candidate_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not candidate_rows:
+            return []
+        captured = pd.to_datetime(
+            pd.Series([row.get("captured_at") for row in candidate_rows]),
+            errors="coerce",
+            utc=True,
+        )
+        if not captured.notna().any():
+            return candidate_rows
+        latest = captured.max()
+        return [row for row, timestamp in zip(candidate_rows, captured, strict=False) if pd.notna(timestamp) and timestamp == latest]
+
+    def _aggregate_candidate_rows(
+        candidate_rows: list[dict[str, Any]],
+        *,
+        p1_id: str,
+        p1_name: str,
+    ) -> dict[str, Any] | None:
+        latest_rows = _latest_candidates(candidate_rows)
+        aligned_pairs: list[tuple[float, float]] = []
+        explicit_bookmakers: set[str] = set()
+        max_nested_bookmaker_count = 0
+        methods: set[str] = set()
+        representative: dict[str, Any] | None = None
+
+        for odds_row in latest_rows:
+            odds_p1_raw = pd.to_numeric(odds_row.get("odds_p1"), errors="coerce")
+            odds_p2_raw = pd.to_numeric(odds_row.get("odds_p2"), errors="coerce")
+            if pd.isna(odds_p1_raw) or pd.isna(odds_p2_raw) or odds_p1_raw <= 1 or odds_p2_raw <= 1:
+                continue
+
+            odds_p1_id = _norm_player_id(odds_row.get("player_1_id"))
+            if p1_id and odds_p1_id:
+                same_order = p1_id == odds_p1_id
+            else:
+                same_order = p1_name == canonicalize_player_name(
+                    odds_row.get("player_1_resolved") or odds_row.get("player_1"),
+                    aliases,
+                )
+
+            if same_order:
+                aligned_pairs.append((float(odds_p1_raw), float(odds_p2_raw)))
+            else:
+                aligned_pairs.append((float(odds_p2_raw), float(odds_p1_raw)))
+
+            bookmaker_name = str(odds_row.get("bookmaker") or "").strip()
+            if bookmaker_name and bookmaker_name not in {"flashscore_market_median", "flashscore_event_page"}:
+                explicit_bookmakers.add(bookmaker_name)
+            max_nested_bookmaker_count = max(max_nested_bookmaker_count, _bookmaker_count(odds_row))
+            method = str(odds_row.get("aggregation_method") or "").strip()
+            if method:
+                methods.add(method)
+            if representative is None:
+                representative = odds_row
+
+        if not aligned_pairs or representative is None:
+            return None
+
+        bookmaker_count = len(explicit_bookmakers)
+        if bookmaker_count <= 0:
+            bookmaker_count = max(max_nested_bookmaker_count, len(aligned_pairs))
+
+        aggregation_method = representative.get("aggregation_method") or "single_source"
+        if len(aligned_pairs) > 1:
+            aggregation_method = "median"
+        elif methods:
+            aggregation_method = sorted(methods)[0]
+
+        return {
+            "tournament": representative.get("tournament"),
+            "surface": representative.get("surface"),
+            "odds_p1": float(np.median([pair[0] for pair in aligned_pairs])),
+            "odds_p2": float(np.median([pair[1] for pair in aligned_pairs])),
+            "bookmaker_count": int(bookmaker_count),
+            "aggregation_method": aggregation_method,
+        }
 
     joined_rows = []
     unmatched_rows: list[str] = []
+    insufficient_bookmaker_rows: list[str] = []
     for row in pred.to_dict(orient="records"):
         date_key = str(row.get("match_date"))
         p1_id = _norm_player_id(row.get("p1_id"))
@@ -119,43 +218,32 @@ def _join_predictions_with_odds(pred: pd.DataFrame, odds: pd.DataFrame) -> pd.Da
         p2 = canonicalize_player_name(row.get("p2_name"), aliases)
         key = (date_key, min(p1, p2), max(p1, p2))
 
-        odds_row = None
-        matched_by_id = False
+        candidate_rows: list[dict[str, Any]] | None = None
         if p1_id and p2_id:
             id_key = (date_key, min(p1_id, p2_id), max(p1_id, p2_id))
-            odds_row = odds_map_ids.get(id_key)
-            matched_by_id = odds_row is not None
-        if odds_row is None:
-            odds_row = odds_map.get(key)
-        if odds_row is None:
+            candidate_rows = odds_map_ids.get(id_key)
+        if not candidate_rows:
+            candidate_rows = odds_map.get(key)
+        if not candidate_rows:
             unmatched_rows.append(f"{row.get('match_date')}:{row.get('p1_name')} vs {row.get('p2_name')}")
             continue
 
-        odds_p1_raw = pd.to_numeric(odds_row.get("odds_p1"), errors="coerce")
-        odds_p2_raw = pd.to_numeric(odds_row.get("odds_p2"), errors="coerce")
-
-        if matched_by_id:
-            same_order = p1_id == _norm_player_id(odds_row.get("player_1_id"))
-        else:
-            same_order = p1 == canonicalize_player_name(odds_row.get("player_1_resolved") or odds_row.get("player_1"), aliases)
-
-        if same_order:
-            odds_p1 = odds_p1_raw
-            odds_p2 = odds_p2_raw
-        else:
-            odds_p1 = odds_p2_raw
-            odds_p2 = odds_p1_raw
-
-        if pd.isna(odds_p1) or pd.isna(odds_p2) or odds_p1 <= 1 or odds_p2 <= 1:
+        aggregated = _aggregate_candidate_rows(candidate_rows, p1_id=p1_id, p1_name=p1)
+        if aggregated is None:
+            continue
+        if int(aggregated["bookmaker_count"]) < MIN_BOOKMAKER_COUNT:
+            insufficient_bookmaker_rows.append(f"{row.get('match_date')}:{row.get('p1_name')} vs {row.get('p2_name')}")
             continue
 
         joined_rows.append(
             {
                 **row,
-                "tournament": odds_row.get("tournament"),
-                "surface": odds_row.get("surface"),
-                "odds_p1": float(odds_p1),
-                "odds_p2": float(odds_p2),
+                "tournament": aggregated.get("tournament"),
+                "surface": aggregated.get("surface"),
+                "odds_p1": float(aggregated["odds_p1"]),
+                "odds_p2": float(aggregated["odds_p2"]),
+                "bookmaker_count": int(aggregated["bookmaker_count"]),
+                "aggregation_method": aggregated.get("aggregation_method"),
             }
         )
 
@@ -164,6 +252,15 @@ def _join_predictions_with_odds(pred: pd.DataFrame, odds: pd.DataFrame) -> pd.Da
         logger.warning(
             "Predictions without odds matches: %d/%d. Sample: %s",
             len(unmatched_rows),
+            len(pred),
+            sample,
+        )
+    if insufficient_bookmaker_rows:
+        sample = ", ".join(insufficient_bookmaker_rows[:5])
+        logger.warning(
+            "Predictions filtered for insufficient bookmaker coverage (<%d): %d/%d. Sample: %s",
+            MIN_BOOKMAKER_COUNT,
+            len(insufficient_bookmaker_rows),
             len(pred),
             sample,
         )

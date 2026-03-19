@@ -11,6 +11,7 @@ RAW_ATP = RAW_DIR / "tennis_atp"
 RAW_WTA = RAW_DIR / "tennis_wta"
 PROCESSED_DIR = DATA_DIR / "processed"
 MODELS_DIR = BASE_DIR / "models"
+DB_DIR = BASE_DIR / "db"
 ODDS_DIR = DATA_DIR / "odds"
 CUSTOM_DIR = DATA_DIR / "custom"
 META_DIR = DATA_DIR / "meta"
@@ -23,8 +24,10 @@ BANKROLL_LOG_FILE = META_DIR / "bankroll_log.json"
 PREDICTION_LOG_FILE = META_DIR / "prediction_log.csv"
 ODDS_UPCOMING_FILE = ODDS_DIR / "upcoming_odds.csv"
 ODDS_HISTORY_FILE = ODDS_DIR / "odds_history.csv"
+ODDS_MOVEMENT_FILE = ODDS_DIR / "odds_movement.csv"
 CUSTOM_ATP_FILE = CUSTOM_DIR / "custom_matches_atp.csv"
 CUSTOM_WTA_FILE = CUSTOM_DIR / "custom_matches_wta.csv"
+SQLITE_DB_FILE = DB_DIR / "tennis.sqlite"
 
 # ELO
 ELO_START = 1500.0
@@ -43,6 +46,8 @@ SURFACE_LIST = ["Hard", "Clay", "Grass", "Carpet"]
 # Model
 CATBOOST_WEIGHT = 0.6
 XGBOOST_WEIGHT = 0.4
+CATBOOST_WEIGHT_WTA = 0.3
+XGBOOST_WEIGHT_WTA = 0.7
 OPTUNA_TRIALS = 50
 TRAIN_CUTOFF = (date.today() - timedelta(days=180)).strftime("%Y-%m-%d")
 
@@ -52,6 +57,7 @@ MAX_DAILY_BETS = 3
 MAX_DAILY_CAPITAL_PCT = 0.50
 MIN_BET_AMOUNT = 0.50
 KELLY_FRACTION = 0.25
+MIN_BOOKMAKER_COUNT = 1
 
 # Bankroll
 DEFAULT_CAPITAL = 100.00

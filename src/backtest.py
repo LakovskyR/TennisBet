@@ -204,8 +204,9 @@ def _build_walk_forward_predictions_for_tour(
             continue
 
         split_result = _train_and_score_split(
-            train_df,
-            test_df,
+            tour=tour,
+            train_df=train_df,
+            test_df=test_df,
             optuna_trials=0,
             use_optuna=False,
             fast=fast,

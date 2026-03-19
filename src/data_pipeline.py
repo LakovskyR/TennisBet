@@ -18,6 +18,7 @@ from config import (
     RAW_WTA,
 )
 from src.data_updater import get_staleness_status
+from src.sqlite_storage import initialize_database, sync_matches_frame, sync_player_aliases, sync_reference_players
 
 TOUR_RAW = {
     "atp": RAW_ATP,
@@ -40,11 +41,43 @@ LEVEL_MAP = {
 }
 
 SCORE_RETIREMENT_MARKERS = ("RET", "W/O", "DEF", "ABN", "unfinished", "Walkover")
+MATCH_SYNC_TEXT_COLUMNS = [
+    "match_date",
+    "tourney_id",
+    "tourney_name",
+    "surface",
+    "tournament_level",
+    "source",
+    "source_file",
+    "tourney_date",
+    "match_num",
+    "winner_id",
+    "winner_name",
+    "loser_id",
+    "loser_name",
+    "score",
+    "best_of",
+    "round",
+]
+MATCH_SYNC_INT_COLUMNS = [
+    "draw_size",
+    "winner_sets_won",
+    "loser_sets_won",
+    "total_games",
+    "year",
+    "days_since_epoch",
+]
+MATCH_SYNC_BOOL_COLUMNS = [
+    "is_retirement",
+    "is_walkover",
+    "is_training_eligible",
+]
 
 
 def _ensure_dirs() -> None:
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     LAST_UPDATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    initialize_database()
 
 
 def _concat_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
@@ -58,6 +91,71 @@ def _concat_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
         trimmed = frame.loc[:, ~frame.isna().all()].copy()
         aligned.append(trimmed.reindex(columns=base.columns))
     return pd.concat(aligned, ignore_index=True)
+
+
+def _normalize_text_series(series: pd.Series) -> pd.Series:
+    return series.astype("string").fillna("").str.strip()
+
+
+def _normalize_int_series(series: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(series, errors="coerce").round().astype("Int64")
+    return numeric.astype("string").fillna("")
+
+
+def _normalize_bool_series(series: pd.Series) -> pd.Series:
+    text = series.astype("string").fillna("").str.strip().str.lower()
+    mapped = text.map(
+        {
+            "": "",
+            "1": "1",
+            "0": "0",
+            "true": "1",
+            "false": "0",
+            "yes": "1",
+            "no": "0",
+        }
+    )
+    numeric = pd.to_numeric(series, errors="coerce")
+    numeric_text = numeric.round().astype("Int64").astype("string").fillna("")
+    return mapped.fillna(numeric_text).replace({"<NA>": ""})
+
+
+def _rows_requiring_match_sync(existing: pd.DataFrame, combined: pd.DataFrame) -> pd.DataFrame:
+    if combined.empty:
+        return combined.copy()
+    if existing.empty or "match_key" not in existing.columns:
+        return combined.drop_duplicates(subset=["match_key"], keep="last").copy()
+
+    current_latest = combined.drop_duplicates(subset=["match_key"], keep="last").copy()
+    existing_latest = existing.drop_duplicates(subset=["match_key"], keep="last").copy()
+
+    compare_columns = MATCH_SYNC_TEXT_COLUMNS + MATCH_SYNC_INT_COLUMNS + MATCH_SYNC_BOOL_COLUMNS
+    for col in compare_columns:
+        if col not in current_latest.columns:
+            current_latest[col] = pd.NA
+        if col not in existing_latest.columns:
+            existing_latest[col] = pd.NA
+
+    existing_compare = existing_latest[["match_key", *compare_columns]].copy()
+    current_compare = current_latest[["match_key", *compare_columns]].copy()
+    merged = current_compare.merge(
+        existing_compare,
+        on="match_key",
+        how="left",
+        suffixes=("_new", "_old"),
+        indicator=True,
+    )
+
+    changed_mask = merged["_merge"].eq("left_only")
+    for col in MATCH_SYNC_TEXT_COLUMNS:
+        changed_mask |= _normalize_text_series(merged[f"{col}_new"]) != _normalize_text_series(merged[f"{col}_old"])
+    for col in MATCH_SYNC_INT_COLUMNS:
+        changed_mask |= _normalize_int_series(merged[f"{col}_new"]) != _normalize_int_series(merged[f"{col}_old"])
+    for col in MATCH_SYNC_BOOL_COLUMNS:
+        changed_mask |= _normalize_bool_series(merged[f"{col}_new"]) != _normalize_bool_series(merged[f"{col}_old"])
+
+    sync_keys = set(merged.loc[changed_mask, "match_key"].astype("string").tolist())
+    return current_latest[current_latest["match_key"].astype("string").isin(sync_keys)].copy()
 
 
 def _yearly_match_files(raw_repo: Path, tour: str) -> list[Path]:
@@ -212,11 +310,13 @@ def build_master_for_tour(tour: str, incremental: bool = True) -> dict[str, Any]
     combined = _derive_columns(combined)
 
     output_file = PROCESSED_DIR / f"{tour}_matches_master.csv"
+    sync_df = combined.copy()
 
     if incremental and output_file.exists():
         existing = pd.read_csv(output_file, low_memory=False)
         if "match_key" not in existing.columns:
             existing = _derive_columns(existing)
+        existing_keys = set(existing["match_key"].astype("string").fillna("").tolist())
         before = len(existing)
         merged = _concat_frames([existing, combined]) if not combined.empty else existing.copy()
         merged = merged.drop_duplicates(subset=["match_key"], keep="last")
@@ -224,13 +324,18 @@ def build_master_for_tour(tour: str, incremental: bool = True) -> dict[str, Any]
         merged = merged.sort_values(["match_date", "tourney_id", "match_num"], na_position="last")
         rows_added = max(0, len(merged) - before)
         final_df = merged
+        sync_df = _rows_requiring_match_sync(existing, combined)
     else:
         final_df = combined.drop_duplicates(subset=["match_key"], keep="last")
         final_df = final_df.sort_values(["match_date", "tourney_id", "match_num"], na_position="last")
         rows_added = len(final_df)
+        sync_df = final_df.copy()
 
     final_df["match_date"] = pd.to_datetime(final_df["match_date"], errors="coerce").dt.strftime(DATE_FMT)
     final_df.to_csv(output_file, index=False)
+    if not sync_df.empty:
+        sync_df["match_date"] = pd.to_datetime(sync_df["match_date"], errors="coerce").dt.strftime(DATE_FMT)
+        sync_matches_frame(sync_df, tour=tour)
 
     max_date = pd.to_datetime(final_df["match_date"], errors="coerce").max()
     result = {
@@ -245,6 +350,8 @@ def build_master_for_tour(tour: str, incremental: bool = True) -> dict[str, Any]
 
 def run_pipeline(incremental: bool = True) -> dict[str, Any]:
     _ensure_dirs()
+    sync_reference_players()
+    sync_player_aliases()
 
     results = {tour: build_master_for_tour(tour, incremental=incremental) for tour in ("atp", "wta")}
 
