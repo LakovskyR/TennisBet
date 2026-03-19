@@ -335,6 +335,45 @@ Files: `src/sqlite_storage.py`, `src/elo_engine.py`, `src/feature_engineering.py
 
 ---
 
+## Phase 13: CI Fix — GitHub Action Timeout (2026-03-19)
+
+**Problem:** `daily_bet.yml` runs for ~2 hours then fails. The `logreg` and `elasticnet` models train on ~190K unscaled feature rows using lbfgs/saga solvers, which fail to converge within `max_iter` and loop repeatedly across 6 models × 3 CV folds × 2 tours = 36 fits. Additionally, sklearn 1.8 deprecation warnings spam the output.
+
+### 13.1 Wrap logreg/elasticnet in StandardScaler pipeline
+- [x] In `src/model_training.py`, add imports: `from sklearn.pipeline import Pipeline` and `from sklearn.preprocessing import StandardScaler`
+- [x] In `_fit_model()` (line ~925), replace the separate `elasticnet` and `logreg` branches with a single branch:
+  ```python
+  if model_name in ("elasticnet", "logreg"):
+      model = Pipeline([
+          ("scaler", StandardScaler()),
+          ("clf", LogisticRegression(**params)),
+      ])
+      model.fit(matrices["x_train_tab"], matrices["y_train"])
+      return model
+  ```
+- **Why:** Features include raw rankings (1-500+), ELO ratings (1000-2500+), and binary dummies. Without scaling, lbfgs/saga cannot converge and grinds for hours.
+- [x] Verified locally: `_predict_model_proba()` still works with Pipeline objects, pickling/unpickling is stable, and `_feature_importance_rows()` now unwraps the final pipeline estimator so logistic-model importance exports still populate.
+
+### 13.2 Fix sklearn penalty deprecation
+- [x] In `_default_model_params()` (line ~769), for `elasticnet`: remove `"penalty": "elasticnet"` — sklearn 1.8+ uses `l1_ratio` to control this. Keep `l1_ratio: 0.5` and `solver: "saga"`.
+- [x] For `logreg` (line ~780): add `"l1_ratio": 0` to make L2 penalty explicit without using the deprecated `penalty` param.
+- [x] Bump `max_iter` to `3000` for both (from 2000/1000) as a safety margin with scaling.
+- **Why:** `penalty` param deprecated in sklearn 1.8, will be removed in 1.10. Current warnings appear 8+ times per CI run.
+
+### 13.3 Reduce Sackmann 404 log noise
+- [x] In `src/data_updater.py` line ~176 (`_fetch_from_fallback_source`): change `logger.info(` to `logger.debug(`
+- [x] Line ~227 (`http_fallback_update`): change `logger.warning(str(exc))` to `logger.debug(str(exc))` for `SackmannYearUnavailableError`
+- [x] Line ~311 (`download_years_http_fallback`): same change — `logger.warning` → `logger.debug` for `SackmannYearUnavailableError`
+- **Why:** 2025/2026 Sackmann CSV files return HTTP 404 because they're not published yet. The code handles this correctly (returns empty frame), but logs 4 WARNING lines per run that clutter CI output.
+
+### 13.4 Verify CI after fixes
+- [ ] Push changes and re-run `daily_bet.yml` workflow
+- [ ] Confirm: (a) completes in <10 min, (b) no ConvergenceWarning, (c) no FutureWarning about penalty, (d) email sends successfully
+- [ ] Compare model metrics before/after to ensure StandardScaler didn't degrade accuracy
+- Local verification done on 2026-03-19: targeted WTA fits for `elasticnet` and `logreg` on recent feature rows completed with zero `FutureWarning` and zero `ConvergenceWarning`; Pipeline `predict_proba()` and pickle round-trip also passed.
+
+---
+
 ## Bug Tracker
 
 ### Known bugs

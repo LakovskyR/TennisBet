@@ -49,6 +49,8 @@ except Exception:  # pragma: no cover
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 CAT_COLS = ["surface", "tournament_level", "round", "best_of"]
 TARGET_COL = "p1_wins"
@@ -769,16 +771,16 @@ def _default_model_params(model_name: str, *, fast: bool) -> dict[str, Any]:
     if model_name == "elasticnet":
         return {
             "solver": "saga",
-            "penalty": "elasticnet",
             "l1_ratio": 0.5,
-            "max_iter": 2000,
+            "max_iter": 3000,
             "C": 1.0,
             "random_state": 42,
         }
     if model_name == "logreg":
         return {
             "solver": "lbfgs",
-            "max_iter": 1000,
+            "l1_ratio": 0,
+            "max_iter": 3000,
             "C": 1.0,
             "random_state": 42,
         }
@@ -922,12 +924,13 @@ def _fit_model(
         model = RandomForestClassifier(**params)
         model.fit(matrices["x_train_tab"], matrices["y_train"])
         return model
-    if model_name == "elasticnet":
-        model = LogisticRegression(**params)
-        model.fit(matrices["x_train_tab"], matrices["y_train"])
-        return model
-    if model_name == "logreg":
-        model = LogisticRegression(**params)
+    if model_name in {"elasticnet", "logreg"}:
+        model = Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                ("clf", LogisticRegression(**params)),
+            ]
+        )
         model.fit(matrices["x_train_tab"], matrices["y_train"])
         return model
     raise KeyError(f"Unsupported model: {model_name}")
@@ -977,13 +980,15 @@ def _save_model_artifact(model_name: str, model: Any, path: Path) -> None:
 def _feature_importance_rows(model_name: str, model: Any, feature_names: list[str]) -> pd.DataFrame:
     if model_name == "catboost":
         values = list(model.get_feature_importance())
-    elif hasattr(model, "feature_importances_"):
-        values = list(model.feature_importances_)
-    elif hasattr(model, "coef_"):
-        coef = np.ravel(getattr(model, "coef_"))
-        values = list(np.abs(coef))
     else:
-        return pd.DataFrame(columns=["model", "feature", "importance"])
+        estimator = model.steps[-1][1] if isinstance(model, Pipeline) else model
+        if hasattr(estimator, "feature_importances_"):
+            values = list(estimator.feature_importances_)
+        elif hasattr(estimator, "coef_"):
+            coef = np.ravel(getattr(estimator, "coef_"))
+            values = list(np.abs(coef))
+        else:
+            return pd.DataFrame(columns=["model", "feature", "importance"])
     return pd.DataFrame({"model": model_name, "feature": feature_names, "importance": values})
 
 

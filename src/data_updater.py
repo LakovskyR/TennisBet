@@ -173,7 +173,7 @@ def _fetch_from_fallback_source(year: int, tour: str) -> pd.DataFrame:
     This exists so the updater can keep a clean extension point when Sackmann
     yearly CSVs have not been published yet.
     """
-    logger.info(
+    logger.debug(
         "Fallback source hook not yet implemented for %s %s; returning empty frame",
         tour.upper(),
         year,
@@ -224,7 +224,7 @@ def http_fallback_update(tour: str, dry_run: bool = False) -> PullResult:
         try:
             remote_df, used_url = _download_year_csv(tour, year)
         except SackmannYearUnavailableError as exc:  # pragma: no cover - network variability
-            logger.warning(str(exc))
+            logger.debug(str(exc))
             skipped_years.append(year)
             last_error = str(exc)
             continue
@@ -308,7 +308,7 @@ def download_years_http_fallback(tour: str, years: list[int], dry_run: bool = Fa
                 }
             )
         except SackmannYearUnavailableError as exc:
-            logger.warning(str(exc))
+            logger.debug(str(exc))
             failed.append(
                 {
                     "year": year,
