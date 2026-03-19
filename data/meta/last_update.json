@@ -6,40 +6,40 @@
     "status": "warning",
     "message": "Data is 5 days behind. Sackmann may be delayed. Predictions are still usable."
   },
-  "updated_at": "2026-03-18T02:32:28Z",
-  "sackmann_pull": "2026-03-18T02:32:28Z",
+  "updated_at": "2026-03-19T16:51:15Z",
+  "sackmann_pull": "2026-03-19T16:51:15Z",
   "tours": {
     "atp": {
       "success": true,
-      "method": "git",
-      "message": "Already up to date.",
-      "rows_added": 0,
-      "latest_raw_match_date": "2026-01-17",
-      "git_success": true
+      "method": "http",
+      "message": "Updated atp_matches_2024.csv via HTTP fallback (https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2024.csv)",
+      "rows_added": 3076,
+      "latest_raw_match_date": "2024-12-18",
+      "git_success": false
     },
     "wta": {
       "success": true,
-      "method": "git",
-      "message": "Already up to date.",
-      "rows_added": 0,
-      "latest_raw_match_date": "2026-03-05",
-      "git_success": true
+      "method": "http",
+      "message": "Updated wta_matches_2024.csv via HTTP fallback (https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2024.csv)",
+      "rows_added": 2689,
+      "latest_raw_match_date": "2024-11-25",
+      "git_success": false
     }
   },
-  "pipeline_last_run": "2026-03-19T01:53:59Z",
+  "pipeline_last_run": "2026-03-19T16:51:29Z",
   "pipeline": {
     "atp": {
       "tour": "atp",
-      "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\atp_matches_master.csv",
+      "output": "/home/runner/work/TennisBet/TennisBet/data/processed/atp_matches_master.csv",
       "rows": 198172,
-      "rows_added": 198172,
+      "rows_added": 0,
       "latest_match_date": "2026-03-13"
     },
     "wta": {
       "tour": "wta",
-      "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\wta_matches_master.csv",
+      "output": "/home/runner/work/TennisBet/TennisBet/data/processed/wta_matches_master.csv",
       "rows": 160508,
-      "rows_added": 160508,
+      "rows_added": 0,
       "latest_match_date": "2026-03-14"
     }
   },
