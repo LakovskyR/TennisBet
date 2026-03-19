@@ -717,6 +717,7 @@ def run_daily_report(
     send_email: bool = True,
     bankroll: float | None = None,
     skip_empty: bool = False,
+    skip_retrain: bool = False,
 ) -> dict[str, Any]:
     _load_dotenv_if_present()
     _load_gmail_secrets_if_present()
@@ -757,16 +758,20 @@ def run_daily_report(
     except Exception as exc:
         report["errors"].append(f"ELO update failed: {exc}")
 
-    try:
-        retrain_report = maybe_retrain_models(tours=tours)
-        report["steps"]["model_retraining"] = retrain_report
-        if retrain_report.get("triggered"):
-            report["warnings"].append(
-                f"Models retrained for: {', '.join(retrain_report.get('tours', []))}."
-            )
-    except Exception as exc:
-        report["errors"].append(f"Model retraining failed: {exc}")
-        report["steps"]["model_retraining"] = {"triggered": False, "error": str(exc)}
+    if skip_retrain:
+        report["steps"]["model_retraining"] = {"triggered": False, "skipped": True, "reason": "cli_flag"}
+        logging.info("Model retraining skipped (--skip-retrain flag)")
+    else:
+        try:
+            retrain_report = maybe_retrain_models(tours=tours)
+            report["steps"]["model_retraining"] = retrain_report
+            if retrain_report.get("triggered"):
+                report["warnings"].append(
+                    f"Models retrained for: {', '.join(retrain_report.get('tours', []))}."
+                )
+        except Exception as exc:
+            report["errors"].append(f"Model retraining failed: {exc}")
+            report["steps"]["model_retraining"] = {"triggered": False, "error": str(exc)}
 
     try:
         odds_report = refresh_odds()
@@ -861,6 +866,7 @@ def main() -> None:
     parser.add_argument("--bankroll", type=float, default=None, help="Override bankroll for this run")
     parser.add_argument("--dry-run", action="store_true", help="Run without sending email")
     parser.add_argument("--skip-empty", action="store_true", help="Skip email send when no bets are recommended")
+    parser.add_argument("--skip-retrain", action="store_true", help="Skip automatic model retraining check")
     args = parser.parse_args()
 
     APP_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -879,6 +885,7 @@ def main() -> None:
         send_email=not args.dry_run,
         bankroll=args.bankroll,
         skip_empty=args.skip_empty,
+        skip_retrain=args.skip_retrain,
     )
     logging.info("Daily report cycle completed")
     print(json.dumps(report, indent=2))

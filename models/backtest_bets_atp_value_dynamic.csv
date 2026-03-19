@@ -1,0 +1,72 @@
+match_date,strategy,p1_name,p2_name,bet_side,odds,stake,won,pnl,bankroll_after
+2025-09-24,value_dynamic,David Goffin,Arthur Rinderknech,P2,2.1,10.65,1,11.715,111.715
+2025-09-24,value_dynamic,Matteo Berrettini,Jaume Munar,P1,2.17,9.99,1,11.6883,123.4033
+2025-09-24,value_dynamic,Marton Fucsovics,Frances Tiafoe,P2,1.96,4.55,0,-4.55,118.8533
+2025-10-13,value_dynamic,Tomas Martin Etcheverry,Mark Lajal,P1,2.12,7.28,1,8.1536,127.0069
+2025-10-13,value_dynamic,Elias Ymer,Jacob Fearnley,P1,4.2,4.93,1,15.776,142.7829
+2025-10-13,value_dynamic,Bernard Tomic,Corentin Moutet,P1,3.575,4.87,0,-4.87,137.9129
+2025-10-20,value_dynamic,Alexander Zverev,Jannik Sinner,P2,5.3,29.79,1,128.097,266.0099
+2025-10-20,value_dynamic,Felix Auger-Aliassime,Gabriel Diallo,P1,4.1,20.27,1,62.837,328.8469
+2025-10-20,value_dynamic,Matteo Berrettini,Alex de Minaur,P2,4.1,18.89,1,58.559,387.4059
+2025-10-27,value_dynamic,Felix Auger-Aliassime,Jannik Sinner,P2,9.0,81.25,1,650.0,1037.4059
+2025-10-27,value_dynamic,Flavio Cobolli,Ben Shelton,P2,1.845,30.73,1,25.9669,1063.3727
+2025-10-27,value_dynamic,Alexander Bublik,Felix Auger-Aliassime,P2,2.7,29.06,1,49.402,1112.7748
+2025-11-03,value_dynamic,Cameron Norrie,Valentin Royer,P2,2.42,10.77,0,-10.77,1102.0048
+2025-11-03,value_dynamic,Ugo Blanchet,Learner Tien,P1,3.9,3.63,0,-3.63,1098.3747
+2026-01-04,value_dynamic,Frances Tiafoe,Aleksandar Vukic,P2,2.53,27.22,0,-27.22,1071.1547
+2026-01-05,value_dynamic,Valentin Vacherot,Sebastian Korda,P1,2.47,7.98,0,-7.98,1063.1747
+2026-01-06,value_dynamic,Grigor Dimitrov,Pablo Carreno Busta,P1,1.425,53.37,1,22.6822,1085.857
+2026-01-06,value_dynamic,Adam Walton,Rinky Hijikata,P2,2.05,35.55,1,37.3275,1123.1845
+2026-01-06,value_dynamic,Francisco Comesana,Juncheng Shang,P1,2.5,35.23,0,-35.23,1087.9545
+2026-01-07,value_dynamic,Andrey Rublev,Yibing Wu,P2,2.62,89.62,0,-89.62,998.3345
+2026-01-07,value_dynamic,Alex Michelsen,Learner Tien,P2,1.52,27.12,0,-27.12,971.2145
+2026-01-07,value_dynamic,Daniil Medvedev,Frances Tiafoe,P2,3.375,17.89,0,-17.89,953.3245
+2026-01-08,value_dynamic,Grigor Dimitrov,Raphael Collignon,P1,1.65,91.49,0,-91.49,861.8345
+2026-01-08,value_dynamic,Karen Khachanov,Michael Mmoh,P2,3.25,67.06,1,150.885,1012.7195
+2026-01-08,value_dynamic,Lorenzo Sonego,Juncheng Shang,P1,2.25,23.3,0,-23.3,989.4195
+2026-01-09,value_dynamic,Sebastian Korda,Alex Michelsen,P1,2.24,77.15,0,-77.15,912.2695
+2026-01-09,value_dynamic,Andrey Rublev,Nuno Borges,P2,2.55,33.27,0,-33.27,878.9995
+2026-01-09,value_dynamic,Daniil Medvedev,Kamil Majchrzak,P2,5.2,32.88,0,-32.88,846.1195
+2026-01-10,value_dynamic,Andrey Rublev,Lorenzo Musetti,P2,1.81,42.1,1,34.101,880.2205
+2026-01-11,value_dynamic,Daniil Medvedev,Brandon Nakashima,P2,3.525,3.64,0,-3.64,876.5805
+2026-01-12,value_dynamic,Cameron Norrie,Hugo Gaston,P1,1.44,70.84,1,31.1696,907.7501
+2026-01-12,value_dynamic,Miomir Kecmanovic,Valentin Vacherot,P2,1.68,51.95,1,35.326,943.0761
+2026-01-12,value_dynamic,Daniel Altmaier,Jaume Munar,P1,2.89,16.35,0,-16.35,926.7261
+2026-01-13,value_dynamic,Marton Fucsovics,Ethan Quinn,P1,1.76,53.06,1,40.3256,967.0517
+2026-01-13,value_dynamic,James Duckworth,Tomas Machac,P2,1.6,47.37,1,28.422,995.4737
+2026-01-13,value_dynamic,Quentin Halys,Jacob Fearnley,P2,2.25,17.23,0,-17.23,978.2437
+2026-01-14,value_dynamic,Sebastian Baez,Jenson Brooksby,P2,1.5,52.4,0,-52.4,925.8437
+2026-01-14,value_dynamic,Marton Fucsovics,Alexander Shevchenko,P2,2.61,42.05,1,67.7005,993.5442
+2026-01-14,value_dynamic,Quentin Halys,Tomas Machac,P2,1.56,40.1,1,22.456,1016.0002
+2026-01-15,value_dynamic,Alejandro Davidovich Fokina,Valentin Vacherot,P2,2.52,41.68,0,-41.68,974.3202
+2026-01-15,value_dynamic,Tommy Paul,Aleksandar Vukic,P2,4.1,29.62,0,-29.62,944.7002
+2026-01-15,value_dynamic,Ugo Humbert,Alexander Shevchenko,P2,3.85,20.56,0,-20.56,924.1402
+2026-01-16,value_dynamic,Tommy Paul,Tomas Machac,P2,2.34,23.05,1,30.887,955.0272
+2026-01-17,value_dynamic,Ugo Humbert,Tomas Machac,P2,2.18,12.59,1,14.8562,969.8834
+2026-03-03,value_dynamic,Nikoloz Basilashvili,A C Cox,P1,2.8,162.3,0,-162.3,807.5834
+2026-03-03,value_dynamic,Dane Sweeny,Daniel Merida Aguilar,P1,2.22,139.47,0,-139.47,668.1134
+2026-03-03,value_dynamic,Moez Echargui,A A Bunt,P1,1.66,117.67,0,-117.67,550.4434
+2026-03-04,value_dynamic,A J Warmenhoyen,Zizou Bergs,P2,1.74,92.78,1,68.6572,619.1006
+2026-03-04,value_dynamic,Marton Fucsovics,A C Cox,P1,2.51,78.64,1,118.7464,737.847
+2026-03-04,value_dynamic,A A Bunt,A C Chesterfield,P1,1.66,48.21,0,-48.21,689.637
+2026-03-05,value_dynamic,Joshua Fonseca,Raphael Collignon,P2,2.12,121.37,0,-121.37,568.267
+2026-03-05,value_dynamic,Grigor Dimitrov,Terence Atmane,P1,1.62,73.97,1,45.8614,614.1284
+2026-03-05,value_dynamic,Tristan Schoolkate,Dino Prizmic,P1,3.55,54.67,0,-54.67,559.4584
+2026-03-06,value_dynamic,Vit Kopriva,Michael Zheng,P1,2.05,106.6,1,111.93,671.3884
+2026-03-06,value_dynamic,Botic Van De Zandschulp,A J Biggs,P1,1.39,78.19,0,-78.19,593.1984
+2026-03-06,value_dynamic,Alejandro Tabilo,Rafael Jodar,P1,2.29,78.0,1,100.62,693.8184
+2026-03-07,value_dynamic,Roberto Bautista Agut,J K Draper,P1,6.0,126.12,0,-126.12,567.6984
+2026-03-07,value_dynamic,Denis Shapovalov,A M Booth,P1,1.46,113.11,1,52.0306,619.729
+2026-03-07,value_dynamic,Corentin Moutet,Ana Kovacevic,P1,1.64,107.68,0,-107.68,512.049
+2026-03-08,value_dynamic,Rinky Hijikata,Luciano Darderi,P1,2.78,45.1,1,80.278,592.327
+2026-03-08,value_dynamic,Grigor Dimitrov,Carlos Alcaraz,P1,13.0,35.47,0,-35.47,556.857
+2026-03-08,value_dynamic,Ugo Humbert,Alex Michelsen,P1,1.93,19.79,0,-19.79,537.067
+2026-03-09,value_dynamic,J K Draper,Francisco Cerundolo,P2,2.5,91.68,0,-91.68,445.387
+2026-03-09,value_dynamic,Novak Djokovic,Ana Kovacevic,P1,1.1,56.57,1,5.657,451.044
+2026-03-09,value_dynamic,Frances Tiafoe,Flavio Cobolli,P2,2.1,14.26,0,-14.26,436.784
+2026-03-10,value_dynamic,Alejandro Davidovich Fokina,Learner Tien,P1,2.15,8.22,0,-8.22,428.564
+2026-03-10,value_dynamic,Daniil Medvedev,Sebastian Baez,P2,5.65,4.21,0,-4.21,424.354
+2026-03-11,value_dynamic,Cameron Norrie,Rinky Hijikata,P2,3.55,19.73,0,-19.73,404.624
+2026-03-12,value_dynamic,Novak Djokovic,J K Draper,P1,1.66,83.4,0,-83.4,321.224
+2026-03-13,value_dynamic,Daniil Medvedev,J K Draper,P1,1.51,53.07,1,27.0657,348.2897
+2026-03-13,value_dynamic,Cameron Norrie,Carlos Alcaraz,P1,13.0,3.41,0,-3.41,344.8797

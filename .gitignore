@@ -11,10 +11,11 @@ data/meta/bankroll_log.json
 data/meta/prediction_log.csv
 data/meta/daily_report_latest.html
 data/processed/*_predictions.csv
-# Model artifacts
-models/*.cbm
-models/*.json
-models/*.csv
+# Model artifacts — tracked in git so weekly_retrain.yml can commit them
+# and daily_bet.yml can use pre-trained models without retraining
+# models/*.cbm
+# models/*.json
+# models/*.csv
 
 node_modules/
 archive/
@@ -27,8 +28,10 @@ openrouter_api.txt
 api.txt
 rtvt.ai.txt
 
-models/*.pkl
-models/*.txt
+# models/*.pkl — keep pkl tracked except RF (too large for GitHub: 2-3 GB each)
+# models/*.txt
+models/rf_atp.pkl
+models/rf_wta.pkl
 data/odds/odds_movement.csv
 data/meta/tml_id_cache.json
 data/processed/performance_report.html

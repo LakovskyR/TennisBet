@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "tours": {
+    "atp": {
+      "tour": "atp",
+      "trained_at": "2026-03-19T02:55:56Z",
+      "feature_rows": 192721,
+      "feature_date_max": "2026-03-13",
+      "feature_schema_signature": "27b2e89ab7a8ef4b1e49991b3547156a7325636a049404de9c527c107eaa932b",
+      "report_file": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\model_report_atp.json",
+      "metrics": {
+        "accuracy": 0.688953488372093,
+        "log_loss": 0.6000153672462923,
+        "brier": 0.20531030703209263,
+        "ece": 0.04677113230466899
+      },
+      "train_cutoff": "2025-09-20",
+      "fallback_latest_months": 3,
+      "cv_folds": 3,
+      "bootstrapped": false
+    },
+    "wta": {
+      "tour": "wta",
+      "trained_at": "2026-03-19T03:20:34Z",
+      "feature_rows": 156503,
+      "feature_date_max": "2026-03-14",
+      "feature_schema_signature": "27b2e89ab7a8ef4b1e49991b3547156a7325636a049404de9c527c107eaa932b",
+      "report_file": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\model_report_wta.json",
+      "metrics": {
+        "accuracy": 0.8555555555555555,
+        "log_loss": 0.33271927755378683,
+        "brier": 0.10329301444916633,
+        "ece": 0.03789714144871323
+      },
+      "train_cutoff": "2025-09-20",
+      "fallback_latest_months": 3,
+      "cv_folds": 3,
+      "bootstrapped": false
+    }
+  },
+  "updated_at": "2026-03-19T03:20:34Z",
+  "train_cutoff": "2025-09-20",
+  "fallback_latest_months": 3,
+  "cv_folds": 3
+}

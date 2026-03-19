@@ -371,6 +371,51 @@ Files: `src/sqlite_storage.py`, `src/elo_engine.py`, `src/feature_engineering.py
 - [ ] Confirm: (a) completes in <10 min, (b) no ConvergenceWarning, (c) no FutureWarning about penalty, (d) email sends successfully
 - [ ] Compare model metrics before/after to ensure StandardScaler didn't degrade accuracy
 - Local verification done on 2026-03-19: targeted WTA fits for `elasticnet` and `logreg` on recent feature rows completed with zero `FutureWarning` and zero `ConvergenceWarning`; Pipeline `predict_proba()` and pickle round-trip also passed.
+- **UPDATE 2026-03-19:** Even after convergence fix, CI runner was killed ("lost communication with server") after ~2 hours. Root cause is not convergence speed — it's total resource consumption: 6 models × 3 CV folds × 2 tours on ~190K rows exceeds the GitHub free runner's 2 CPU / 7GB RAM. Phase 14 addresses this with a workflow split.
+
+---
+
+## Phase 14: CI Workflow Split — Separate Retrain from Daily Predictions (2026-03-19)
+
+**Problem:** The `daily_bet.yml` workflow runs everything in a single job: data update → pipeline → ELO → model retraining → odds scrape → predictions → email. When `maybe_retrain_models()` triggers a retrain (weekly policy), the 6-model × 3-fold × 2-tour training on ~190K rows exhausts the GitHub free runner (2 CPU / 7GB RAM) and the runner is killed after ~2 hours.
+
+**Solution:** Split into two workflows. Retraining already only triggers weekly — make that explicit with a separate weekly workflow.
+
+### 14.1 Add `--skip-retrain` flag to `daily_report.py`
+- [x] Add `--skip-retrain` CLI argument to `main()` in `src/daily_report.py` (line 869)
+- [x] When `--skip-retrain` is passed, skip the `maybe_retrain_models()` call (lines 761-763)
+- [x] Log: `"Model retraining skipped (--skip-retrain flag)"`
+- [x] Set `report["steps"]["model_retraining"] = {"triggered": False, "skipped": True, "reason": "cli_flag"}`
+- Files: `src/daily_report.py`
+
+### 14.2 Update `daily_bet.yml` to skip retrain
+- [x] Changed run command to `python -m src.daily_report --skip-retrain` (line 45)
+- [x] Daily job now: data update → pipeline → ELO → odds → predict → email (no heavy training)
+- [x] Expected runtime: <5 minutes
+- Files: `.github/workflows/daily_bet.yml`
+
+### 14.3 Create `weekly_retrain.yml` workflow
+- [x] File exists: `.github/workflows/weekly_retrain.yml`
+- [x] Schedule: `cron: "0 3 * * 0"` (Sunday 3:00 AM UTC) + `workflow_dispatch`
+- [x] Steps: Checkout (LFS + write token) → Python 3.11 → Chrome → pip install → `python -m src.retrain_cli` (timeout 45min) → git commit + push models → upload artifacts
+- [x] Uses `secrets.GITHUB_TOKEN` with `contents: write` permission
+- [x] `timeout-minutes: 45` set on retrain step
+- [x] Added `id: setup-chrome` so `CHROME_BIN`/`CHROMEDRIVER_PATH` env vars resolve correctly
+- [x] `.gitignore` updated: model file exclusions (`models/*.cbm`, `models/*.json`, `models/*.csv`, `models/*.pkl`, `models/*.txt`) commented out so weekly retrain can commit them
+- Files: `.github/workflows/weekly_retrain.yml`, `.gitignore`
+
+### 14.4 Create retrain CLI entrypoint
+- [x] File exists: `src/retrain_cli.py` — runs data update → pipeline → ELO → `train_models()`
+- [x] Each pre-training step wrapped in try/except so failures don't block retraining
+- [x] Accepts `--tours` flag, `py_compile` passes
+- Files: `src/retrain_cli.py`
+
+### 14.5 Verify both workflows
+- [ ] Push all changes
+- [ ] Manually trigger `daily_bet.yml` → confirm <5 min, email sends, no retrain
+- [ ] Manually trigger `weekly_retrain.yml` → confirm retrain completes, models committed
+- [ ] Verify daily workflow picks up models committed by weekly workflow
+- [ ] Confirm no `ConvergenceWarning` or `FutureWarning` in either workflow
 
 ---
 

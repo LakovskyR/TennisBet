@@ -1,0 +1,11 @@
+{
+  "winner": "top2_equal",
+  "weights": {
+    "lgbm": 0.5,
+    "xgboost": 0.5
+  },
+  "cv_log_loss": 0.5079735128507958,
+  "cv_brier": 0.1735517651477725,
+  "cv_accuracy": 0.7274103382641668,
+  "selection_date": "2026-03-19"
+}
