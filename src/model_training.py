@@ -47,7 +47,6 @@ try:
 except Exception:  # pragma: no cover
     optuna = None
 
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -65,12 +64,11 @@ DEFAULT_ENSEMBLE_WEIGHTS = {
     "winner": "cat60_xgb40",
     "weights": {"catboost": 3 / 5, "xgboost": 2 / 5},
 }
-BASE_MODEL_ORDER = ["catboost", "xgboost", "lgbm", "rf", "elasticnet", "logreg"]
+BASE_MODEL_ORDER = ["catboost", "xgboost", "lgbm", "elasticnet", "logreg"]
 BASE_MODEL_LABELS = {
     "catboost": "catboost",
     "xgboost": "xgboost",
     "lgbm": "lgbm",
-    "rf": "rf",
     "elasticnet": "elasticnet",
     "logreg": "logreg",
 }
@@ -187,7 +185,6 @@ def _artifacts_for_tour(tour: str) -> dict[str, Path]:
         "catboost_model": MODELS_DIR / f"catboost_{tour}.cbm",
         "xgboost_model": MODELS_DIR / f"xgboost_{tour}.json",
         "lgbm_model": MODELS_DIR / f"lgbm_{tour}.txt",
-        "rf_model": MODELS_DIR / f"rf_{tour}.pkl",
         "elasticnet_model": MODELS_DIR / f"elasticnet_{tour}.pkl",
         "logreg_model": MODELS_DIR / f"logreg_{tour}.pkl",
         "ensemble_config": MODELS_DIR / f"ensemble_config_{tour}.json",
@@ -681,7 +678,7 @@ def _available_model_names() -> list[str]:
     else:
         available.append("lgbm")
 
-    available.extend(["rf", "elasticnet", "logreg"])
+    available.extend(["elasticnet", "logreg"])
     return available
 
 
@@ -759,14 +756,6 @@ def _default_model_params(model_name: str, *, fast: bool) -> dict[str, Any]:
             "random_state": 42,
             "n_jobs": -1,
             "verbosity": -1,
-        }
-    if model_name == "rf":
-        return {
-            "n_estimators": 300 if fast else 700,
-            "max_depth": 10 if fast else None,
-            "min_samples_leaf": 2,
-            "random_state": 42,
-            "n_jobs": -1,
         }
     if model_name == "elasticnet":
         return {
@@ -920,10 +909,6 @@ def _fit_model(
         model = LGBMClassifier(**params)
         model.fit(matrices["x_train_tab"], matrices["y_train"])
         return model
-    if model_name == "rf":
-        model = RandomForestClassifier(**params)
-        model.fit(matrices["x_train_tab"], matrices["y_train"])
-        return model
     if model_name in {"elasticnet", "logreg"}:
         model = Pipeline(
             [
@@ -947,7 +932,6 @@ def _model_artifact_path(tour: str, model_name: str) -> Path:
         "catboost": f"catboost_{tour}.cbm",
         "xgboost": f"xgboost_{tour}.json",
         "lgbm": f"lgbm_{tour}.txt",
-        "rf": f"rf_{tour}.pkl",
         "elasticnet": f"elasticnet_{tour}.pkl",
         "logreg": f"logreg_{tour}.pkl",
     }
