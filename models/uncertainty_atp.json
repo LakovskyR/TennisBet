@@ -2,8 +2,8 @@
   "method": "split_conformal_absolute_residual",
   "alpha": 0.1,
   "confidence_level": 0.9,
-  "residual_quantile": 0.7100352979773346,
+  "residual_quantile": 0.7043036482111062,
   "empirical_coverage": 0.9040697674418605,
-  "mean_interval_width": 0.9429064178845202,
+  "mean_interval_width": 0.9399317779704783,
   "n_test": 688
 }

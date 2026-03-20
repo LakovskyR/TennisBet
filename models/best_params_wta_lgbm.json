@@ -1,0 +1,14 @@
+{
+  "tour": "wta",
+  "model": "lgbm",
+  "score": 0.5068130090151445,
+  "params": {
+    "n_estimators": 746,
+    "learning_rate": 0.03875507304060077,
+    "max_depth": 8,
+    "subsample": 0.7005858565286722,
+    "colsample_bytree": 0.7825548886549845,
+    "min_child_weight": 7
+  },
+  "updated_at": "2026-03-20T21:03:43Z"
+}

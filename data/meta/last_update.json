@@ -89,15 +89,17 @@
     },
     "combined": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\player_features.csv"
   },
-  "model_last_trained": "2026-03-19T03:20:34Z",
+  "model_last_trained": "2026-03-20T21:19:32Z",
   "model_training": {
     "tours": [
+      "atp",
       "wta"
     ],
-    "train_cutoff": "2025-09-20",
+    "train_cutoff": "2025-09-21",
     "fallback_latest_months": 3,
     "cv_folds": 3,
     "report_files": {
+      "atp": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\model_report_atp.json",
       "wta": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\model_report_wta.json"
     },
     "metrics_file": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\models\\model_metrics.csv"
