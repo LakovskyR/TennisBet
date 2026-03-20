@@ -2,12 +2,12 @@
   "initialized_at": "2026-03-14T00:00:00Z",
   "last_new_match": "2026-03-14",
   "staleness": {
-    "days_behind": 5,
+    "days_behind": 6,
     "status": "warning",
-    "message": "Data is 5 days behind. Sackmann may be delayed. Predictions are still usable."
+    "message": "Data is 6 days behind. Sackmann may be delayed. Predictions are still usable."
   },
-  "updated_at": "2026-03-19T16:51:15Z",
-  "sackmann_pull": "2026-03-19T16:51:15Z",
+  "updated_at": "2026-03-20T05:46:14Z",
+  "sackmann_pull": "2026-03-20T05:46:14Z",
   "tours": {
     "atp": {
       "success": true,
@@ -26,7 +26,7 @@
       "git_success": false
     }
   },
-  "pipeline_last_run": "2026-03-19T16:51:29Z",
+  "pipeline_last_run": "2026-03-20T05:46:27Z",
   "pipeline": {
     "atp": {
       "tour": "atp",
