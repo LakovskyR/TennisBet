@@ -1,0 +1,13 @@
+{
+  "tour": "atp",
+  "model": "catboost",
+  "score": 0.5129037441087648,
+  "params": {
+    "iterations": 832,
+    "learning_rate": 0.044219455538326784,
+    "depth": 9,
+    "l2_leaf_reg": 6.471925857394561,
+    "border_count": 55
+  },
+  "updated_at": "2026-03-20T15:57:27Z"
+}

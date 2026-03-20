@@ -12,6 +12,7 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -855,8 +856,16 @@ def run_daily_report(
         report["steps"]["email"] = {"sent": False, "reason": "dry_run"}
 
     serializable = dict(report)
-    serializable["recommendations"] = int(len(report["recommendations"]))
-    serializable["closest"] = int(len(report["closest"]))
+    # Convert any remaining DataFrames so json.dumps() works
+    for key, val in list(serializable.items()):
+        if isinstance(val, pd.DataFrame):
+            serializable[key] = val.to_dict(orient="records")
+        elif isinstance(val, (np.integer,)):
+            serializable[key] = int(val)
+        elif isinstance(val, (np.floating,)):
+            serializable[key] = float(val)
+        elif isinstance(val, np.ndarray):
+            serializable[key] = val.tolist()
     return serializable
 
 

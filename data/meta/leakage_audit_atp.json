@@ -1,6 +1,6 @@
 {
   "tour": "atp",
-  "generated_at": "2026-03-19T03:38:41Z",
+  "generated_at": "2026-03-20T10:24:13Z",
   "checks": {
     "rows": 192721,
     "days_since_non_negative": true,
