@@ -719,6 +719,7 @@ def run_daily_report(
     bankroll: float | None = None,
     skip_empty: bool = False,
     skip_retrain: bool = False,
+    skip_data: bool = False,
 ) -> dict[str, Any]:
     _load_dotenv_if_present()
     _load_gmail_secrets_if_present()
@@ -739,25 +740,32 @@ def run_daily_report(
         "override_used": bankroll is not None,
     }
 
-    try:
-        report["steps"]["data_update"] = update_data_sources()
-    except Exception as exc:
-        report["errors"].append(f"Data update failed: {exc}")
+    if skip_data:
+        report["steps"]["data_update"] = {"skipped": True, "reason": "cli_flag"}
+        report["steps"]["player_reference_files"] = {"skipped": True, "reason": "cli_flag"}
+        report["steps"]["pipeline"] = {"skipped": True, "reason": "cli_flag"}
+        report["steps"]["elo"] = {"skipped": True, "reason": "cli_flag"}
+        logging.info("Data update / pipeline / ELO skipped (--skip-data flag)")
+    else:
+        try:
+            report["steps"]["data_update"] = update_data_sources()
+        except Exception as exc:
+            report["errors"].append(f"Data update failed: {exc}")
 
-    player_ref_report = _ensure_player_reference_files()
-    report["steps"]["player_reference_files"] = player_ref_report
-    for failure in player_ref_report.get("failures", []):
-        report["errors"].append(f"Player reference download failed: {failure}")
+        player_ref_report = _ensure_player_reference_files()
+        report["steps"]["player_reference_files"] = player_ref_report
+        for failure in player_ref_report.get("failures", []):
+            report["errors"].append(f"Player reference download failed: {failure}")
 
-    try:
-        report["steps"]["pipeline"] = run_pipeline(incremental=True)
-    except Exception as exc:
-        report["errors"].append(f"Pipeline failed: {exc}")
+        try:
+            report["steps"]["pipeline"] = run_pipeline(incremental=True)
+        except Exception as exc:
+            report["errors"].append(f"Pipeline failed: {exc}")
 
-    try:
-        report["steps"]["elo"] = run_elo(incremental=True)
-    except Exception as exc:
-        report["errors"].append(f"ELO update failed: {exc}")
+        try:
+            report["steps"]["elo"] = run_elo(incremental=True)
+        except Exception as exc:
+            report["errors"].append(f"ELO update failed: {exc}")
 
     if skip_retrain:
         report["steps"]["model_retraining"] = {"triggered": False, "skipped": True, "reason": "cli_flag"}
@@ -876,6 +884,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Run without sending email")
     parser.add_argument("--skip-empty", action="store_true", help="Skip email send when no bets are recommended")
     parser.add_argument("--skip-retrain", action="store_true", help="Skip automatic model retraining check")
+    parser.add_argument("--skip-data", action="store_true", help="Skip data update, pipeline, and ELO steps (use when already run externally)")
     args = parser.parse_args()
 
     APP_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -895,6 +904,7 @@ def main() -> None:
         bankroll=args.bankroll,
         skip_empty=args.skip_empty,
         skip_retrain=args.skip_retrain,
+        skip_data=args.skip_data,
     )
     logging.info("Daily report cycle completed")
     print(json.dumps(report, indent=2))
