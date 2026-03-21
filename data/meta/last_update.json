@@ -1,46 +1,46 @@
 {
   "initialized_at": "2026-03-14T00:00:00Z",
-  "last_new_match": "2026-03-14",
+  "last_new_match": "2026-03-21",
   "staleness": {
-    "days_behind": 7,
-    "status": "warning",
-    "message": "Data is 7 days behind. Sackmann may be delayed. Predictions are still usable."
+    "days_behind": 0,
+    "status": "fresh",
+    "message": "Data is fresh."
   },
-  "updated_at": "2026-03-21T05:37:06Z",
-  "sackmann_pull": "2026-03-21T05:37:06Z",
+  "updated_at": "2026-03-21T17:21:05Z",
+  "sackmann_pull": "2026-03-21T17:21:05Z",
   "tours": {
     "atp": {
       "success": true,
-      "method": "http",
-      "message": "Updated atp_matches_2024.csv via HTTP fallback (https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2024.csv)",
-      "rows_added": 3076,
-      "latest_raw_match_date": "2024-12-18",
-      "git_success": false
+      "method": "git",
+      "message": "Already up to date.",
+      "rows_added": 0,
+      "latest_raw_match_date": "2026-01-17",
+      "git_success": true
     },
     "wta": {
       "success": true,
-      "method": "http",
-      "message": "Updated wta_matches_2024.csv via HTTP fallback (https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2024.csv)",
-      "rows_added": 2689,
+      "method": "git",
+      "message": "Already up to date.",
+      "rows_added": 0,
       "latest_raw_match_date": "2024-11-25",
-      "git_success": false
+      "git_success": true
     }
   },
-  "pipeline_last_run": "2026-03-21T05:42:04Z",
+  "pipeline_last_run": "2026-03-21T17:31:54Z",
   "pipeline": {
     "atp": {
       "tour": "atp",
       "output": "/home/runner/work/TennisBet/TennisBet/data/processed/atp_matches_master.csv",
-      "rows": 198172,
-      "rows_added": 0,
-      "latest_match_date": "2026-03-13"
+      "rows": 198255,
+      "rows_added": 83,
+      "latest_match_date": "2026-03-21"
     },
     "wta": {
       "tour": "wta",
       "output": "/home/runner/work/TennisBet/TennisBet/data/processed/wta_matches_master.csv",
-      "rows": 160508,
-      "rows_added": 0,
-      "latest_match_date": "2026-03-14"
+      "rows": 160970,
+      "rows_added": 462,
+      "latest_match_date": "2026-03-21"
     }
   },
   "elo_last_run": "2026-03-20T10:22:43Z",
