@@ -38,3 +38,15 @@ data/processed/performance_report.html
 .claude/
 
 .streamlit/secrets.toml
+
+# Deploy/runtime-only repo: keep local retrain helpers and training diagnostics out of pushes
+retrain_weekly.bat
+models/backtest_bets_*.csv
+models/backtest_predictions_*.csv
+models/backtest_results.csv
+models/best_params_*.json
+models/elasticnet_*.pkl
+models/logreg_*.pkl
+models/temporal_cv_*.csv
+models/test_predictions_*.csv
+models/training_state.json

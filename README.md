@@ -72,6 +72,12 @@ Common keys:
 - `CHROME_BIN`
 - `CHROMEDRIVER_PATH`
 
+## Deploy Scope
+
+The deploy branch should contain runtime assets only.
+
+See [DEPLOY_RUNTIME.md](DEPLOY_RUNTIME.md) for the current keep/drop boundary.
+
 Optional CLI runs:
 
 ```bash
