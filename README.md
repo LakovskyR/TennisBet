@@ -78,6 +78,10 @@ The deploy branch should contain runtime assets only.
 
 See [DEPLOY_RUNTIME.md](DEPLOY_RUNTIME.md) for the current keep/drop boundary.
 
+To publish fresh app data from a local machine, run `publish_runtime_update.bat`.
+That workflow refreshes runtime outputs and pushes the committed predictions and
+current odds snapshot used by the deployed app.
+
 Optional CLI runs:
 
 ```bash

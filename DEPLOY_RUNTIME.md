@@ -7,6 +7,7 @@ Keep tracked for deploy:
 
 - `app.py`, `config.py`, `src/`, `requirements.txt`, `packages.txt`
 - `.streamlit/secrets.toml.example`
+- `publish_runtime_update.bat` for local runtime refresh + push
 - runtime model artifacts:
   - `models/catboost_*.cbm`
   - `models/xgboost_*.json`

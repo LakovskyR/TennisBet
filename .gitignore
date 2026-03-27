@@ -42,6 +42,7 @@ data/processed/performance_report.html
 # Deploy/runtime-only repo: keep local retrain helpers and training diagnostics out of pushes
 retrain_weekly.bat
 models/backtest_bets_*.csv
+models/backtest_equity_*.csv
 models/backtest_predictions_*.csv
 models/backtest_results.csv
 models/best_params_*.json
@@ -50,3 +51,11 @@ models/logreg_*.pkl
 models/temporal_cv_*.csv
 models/test_predictions_*.csv
 models/training_state.json
+
+# Local AI workflow notes and prompts
+*_todo.md
+*_prompt.md
+PROJECT_BUILD_SPEC.md
+
+!data/odds/upcoming_odds.csv
+!data/processed/*_predictions.csv
