@@ -466,11 +466,15 @@ def _ingest_uploaded_odds_csv(uploaded_file: Any, default_tour: str | None) -> t
 
 
 def _run_data_refresh() -> dict[str, Any]:
-    report: dict[str, Any] = {"steps": {}, "warnings": []}
+    now = datetime.now(UTC)
+    refresh_years = [now.year]
+    if now.month == 1:
+        refresh_years.insert(0, now.year - 1)
+    report: dict[str, Any] = {"steps": {}, "warnings": [], "years": refresh_years}
 
     # 1. TML ingest (ATP from TML-Database)
     try:
-        report["steps"]["tml_ingest"] = tml_ingest(years=[2025, 2026])
+        report["steps"]["tml_ingest"] = tml_ingest(years=refresh_years)
     except Exception as exc:
         report["warnings"].append(f"TML ingest failed: {exc}")
         report["steps"]["tml_ingest"] = {"status": "error", "message": str(exc)}
@@ -491,7 +495,7 @@ def _run_data_refresh() -> dict[str, Any]:
 
     # 4. WTA backfill (Tennis Explorer via Firecrawl)
     try:
-        report["steps"]["wta_backfill"] = backfill_wta(years=[2025, 2026])
+        report["steps"]["wta_backfill"] = backfill_wta(years=refresh_years)
     except Exception as exc:
         report["warnings"].append(f"WTA backfill failed: {exc}")
         report["steps"]["wta_backfill"] = {"status": "error", "message": str(exc)}

@@ -72,6 +72,14 @@ ID_CACHE_FILE = META_DIR / "tml_id_cache.json"
 FUZZY_THRESHOLD = 88
 
 
+def _default_refresh_years(now: datetime | None = None) -> list[int]:
+    current = now or datetime.now(UTC)
+    years = [current.year]
+    if current.month == 1:
+        years.insert(0, current.year - 1)
+    return years
+
+
 # ---------------------------------------------------------------------------
 # Player ID Mapping: TML short-ID → Sackmann numeric ID
 # ---------------------------------------------------------------------------
@@ -343,7 +351,7 @@ def ingest(
     Download TML data, convert to Sackmann format, write to raw dir.
 
     Args:
-        years: Which years to download (default: [2025, 2026])
+        years: Which years to download (default: active refresh window)
         check_only: If True, download and report but don't write files
         incremental: If True, merge with existing CSV
 
@@ -351,7 +359,7 @@ def ingest(
         Report dict
     """
     if years is None:
-        years = [2025, 2026]
+        years = _default_refresh_years()
 
     log.info("=" * 60)
     log.info("TML-Database → Sackmann Ingest")
@@ -457,8 +465,8 @@ def ingest(
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="TML-Database → Sackmann format converter (ATP)")
-    parser.add_argument("--years", nargs="+", type=int, default=[2025, 2026],
-                        help="Years to download (default: 2025 2026)")
+    parser.add_argument("--years", nargs="+", type=int, default=_default_refresh_years(),
+                        help="Years to download (default: current year; January also includes previous year)")
     parser.add_argument("--check-only", action="store_true",
                         help="Download and report but don't write files")
     parser.add_argument("--no-incremental", action="store_true",

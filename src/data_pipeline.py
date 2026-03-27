@@ -266,9 +266,10 @@ def _derive_columns(df: pd.DataFrame) -> pd.DataFrame:
     df["match_date"] = pd.to_datetime(df["tourney_date"].astype("string"), format="%Y%m%d", errors="coerce")
     df = df[df["match_date"].notna()].copy()
 
-    parsed_scores = df["score"].astype("string").map(_parse_score).apply(pd.Series)
-    for col in parsed_scores.columns:
-        df[col] = parsed_scores[col]
+    parsed_scores = df["score"].astype("string").apply(_parse_score)
+    parsed_df = pd.DataFrame(parsed_scores.tolist(), index=df.index)
+    for col in parsed_df.columns:
+        df[col] = parsed_df[col]
 
     df["year"] = df["match_date"].dt.year.astype("Int64")
     df["days_since_epoch"] = (
@@ -356,8 +357,11 @@ def run_pipeline(incremental: bool = True) -> dict[str, Any]:
     results = {tour: build_master_for_tour(tour, incremental=incremental) for tour in ("atp", "wta")}
 
     if LAST_UPDATE_FILE.exists():
-        text = LAST_UPDATE_FILE.read_text(encoding="utf-8-sig")
-        state = json.loads(text) if text.strip() else {}
+        try:
+            text = LAST_UPDATE_FILE.read_text(encoding="utf-8-sig")
+            state = json.loads(text) if text.strip() else {}
+        except (json.JSONDecodeError, ValueError):
+            state = {}
     else:
         state = {}
 

@@ -22,7 +22,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, UTC
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -248,20 +248,49 @@ def check_sackmann(year: int) -> pd.DataFrame | None:
 # ---------------------------------------------------------------------------
 # Source 2: Firecrawl + Tennis Explorer
 # ---------------------------------------------------------------------------
+def _read_key_file(path: Path, valid_prefixes: tuple[str, ...]) -> str | None:
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8").strip()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("//") or line.startswith("#"):
+            continue
+        for prefix in valid_prefixes:
+            if line.startswith(prefix):
+                return line
+        if ":" in line:
+            _, _, value = line.partition(":")
+            value = value.strip().strip('",')
+            for prefix in valid_prefixes:
+                if value.startswith(prefix):
+                    return value
+    return None
+
+
+def _default_refresh_years(now: datetime | None = None) -> list[int]:
+    current = now or datetime.now(UTC)
+    years = [current.year]
+    if current.month == 1:
+        years.insert(0, current.year - 1)
+    return years
+
+
 def _get_firecrawl_key() -> str | None:
-    """Get Firecrawl API key from env or firecrawl.txt."""
+    """Get Firecrawl API key from env, firecrawl.txt, or api.txt."""
     key = os.environ.get("FIRECRAWL_API_KEY")
     if key:
         return key
-    # Try reading from firecrawl.txt
-    for path in [Path("firecrawl.txt"), Path(__file__).parent.parent / "firecrawl.txt"]:
-        if path.exists():
-            text = path.read_text().strip()
-            # Extract the key (second line or after //)
-            for line in text.split("\n"):
-                line = line.strip()
-                if line and not line.startswith("//") and not line.startswith("#"):
-                    return line
+    root = Path(__file__).parent.parent
+    for path in [
+        Path("firecrawl.txt"),
+        root / "firecrawl.txt",
+        Path("api.txt"),
+        root / "api.txt",
+    ]:
+        key = _read_key_file(path, ("fc-",))
+        if key:
+            return key
     return None
 
 
@@ -278,6 +307,46 @@ def _get_rtrvr_key() -> str | None:
                 if line and not line.startswith("//") and not line.startswith("#"):
                     return line
     return None
+
+
+def _load_existing_tourney_ids(year: int) -> set[str]:
+    output_path = RAW_WTA / f"wta_matches_{year}.csv"
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        return set()
+    try:
+        existing = pd.read_csv(output_path, usecols=["tourney_id"], low_memory=False)
+    except Exception:
+        return set()
+    return set(existing["tourney_id"].astype("string").dropna().tolist())
+
+
+def _parse_tourney_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value), "%Y%m%d").date()
+    except Exception:
+        return None
+
+
+def _should_refresh_tournament(
+    tournament: dict[str, Any],
+    today: date,
+    existing_tourney_ids: set[str],
+    recent_days: int = 21,
+) -> bool:
+    tourney_date = _parse_tourney_date(tournament.get("tourney_date"))
+    if tourney_date and tourney_date > today:
+        return False
+
+    tourney_id = str(tournament.get("tourney_id", ""))
+    if not tourney_id or tourney_id not in existing_tourney_ids:
+        return True
+
+    if tourney_date is None:
+        return True
+
+    return tourney_date >= today - timedelta(days=recent_days)
 
 def rtrvr_scrape(url: str, api_key: str) -> str | None:
     """Scrape a URL using rtrvr.ai API, returns text content or accessibility tree."""
@@ -323,6 +392,7 @@ def firecrawl_scrape(url: str, api_key: str) -> dict[str, Any] | None:
     """Scrape a URL using Firecrawl API, returns markdown content."""
     headers = {
         "Authorization": f"Bearer {api_key}",
+        "x-api-key": api_key,
         "Content-Type": "application/json",
     }
     payload = {
@@ -354,6 +424,7 @@ def firecrawl_extract(url: str, api_key: str, schema: dict) -> dict[str, Any] | 
     """Use Firecrawl's extract endpoint to get structured data."""
     headers = {
         "Authorization": f"Bearer {api_key}",
+        "x-api-key": api_key,
         "Content-Type": "application/json",
     }
     payload = {
@@ -452,9 +523,9 @@ def _normalize_round(raw: str | None, draw_size: int = 128) -> str:
     return ROUND_MAP.get(val, "R32")
 
 
-def verify_tournament_urls(year: int) -> list[dict]:
+def verify_tournament_urls(year: int, tournaments: list[dict[str, Any]] | None = None) -> list[dict]:
     """Check which tournament URLs return valid data."""
-    tournaments = YEAR_TOURNAMENTS.get(year, [])
+    tournaments = tournaments or YEAR_TOURNAMENTS.get(year, [])
     results = []
     for t in tournaments:
         url = f"{TENNIS_EXPLORER_BASE}/{t['slug']}/{year}/wta-women/"
@@ -1049,7 +1120,7 @@ def backfill_wta(
     3. Enrich with Perplexity if needed
     """
     if years is None:
-        years = [2025, 2026]
+        years = _default_refresh_years()
 
     log.info("=" * 60)
     log.info("WTA Data Backfill")
@@ -1070,9 +1141,42 @@ def backfill_wta(
     for year in years:
         log.info(f"\n--- Processing {year} ---")
 
+        tournaments = YEAR_TOURNAMENTS.get(year, [])
+        if not tournaments:
+            log.warning(f"  No tournament registry for {year}")
+            reports[str(year)] = {
+                "success": False,
+                "source": "none",
+                "message": f"No tournament registry for {year}",
+            }
+            continue
+
+        today = datetime.now(UTC).date()
+        existing_tourney_ids = _load_existing_tourney_ids(year)
+        refresh_targets = [
+            t for t in tournaments
+            if _should_refresh_tournament(t, today=today, existing_tourney_ids=existing_tourney_ids)
+        ]
+        skipped_count = len(tournaments) - len(refresh_targets)
+        log.info(
+            "  Refresh targets: %s/%s tournament(s) (%s skipped as already captured or future)",
+            len(refresh_targets),
+            len(tournaments),
+            skipped_count,
+        )
+        if not refresh_targets:
+            reports[str(year)] = {
+                "success": True,
+                "source": "cached",
+                "rows": 0,
+                "skipped_tournaments": skipped_count,
+                "message": "No WTA tournaments needed refresh.",
+            }
+            continue
+
         # Verify tournament URLs first
         log.info(f"  Verifying {year} tournament URLs...")
-        url_results = verify_tournament_urls(year)
+        url_results = verify_tournament_urls(year, tournaments=refresh_targets)
         valid_tournaments = [r for r in url_results if r["valid"]]
         log.info(f"  Found {len(valid_tournaments)} valid tournament URLs out of {len(url_results)}")
         for r in url_results:
@@ -1099,13 +1203,10 @@ def backfill_wta(
         if source in ("auto", "firecrawl") and (firecrawl_key or rtrvr_key):
             log.info("  Trying Firecrawl / rtrvr.ai + Tennis Explorer...")
             all_matches = []
-            tournaments = YEAR_TOURNAMENTS.get(year, [])
-            if not tournaments:
-                log.warning(f"  No tournament registry for {year}")
 
             today_str = datetime.now(UTC).strftime("%Y%m%d")
-            for i, t in enumerate(tournaments):
-                log.info(f"  [{i+1}/{len(tournaments)}] {t['name']}")
+            for i, t in enumerate(refresh_targets):
+                log.info(f"  [{i+1}/{len(refresh_targets)}] {t['name']}")
                 
                 if t.get("tourney_date", "") > today_str:
                     log.info(f"  Skipping future tournament: {t['name']} ({t['tourney_date']})")
@@ -1145,6 +1246,7 @@ def backfill_wta(
                     "source": "firecrawl",
                     "rows": len(all_matches),
                     "output": str(output_path),
+                    "skipped_tournaments": skipped_count,
                 }
                 continue
 
@@ -1170,7 +1272,7 @@ def backfill_wta(
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="WTA match data backfill")
-    parser.add_argument("--years", nargs="+", type=int, default=[2025, 2026])
+    parser.add_argument("--years", nargs="+", type=int, default=_default_refresh_years())
     parser.add_argument("--source", choices=["auto", "sackmann", "firecrawl"], default="auto")
     parser.add_argument("--check-sackmann", action="store_true",
                         help="Only check if Sackmann has data, don't scrape")

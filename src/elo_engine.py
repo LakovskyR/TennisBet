@@ -291,8 +291,11 @@ def run_elo(incremental: bool = True) -> dict[str, Any]:
     }
 
     if LAST_UPDATE_FILE.exists():
-        text = LAST_UPDATE_FILE.read_text(encoding="utf-8-sig")
-        state = json.loads(text) if text.strip() else {}
+        try:
+            text = LAST_UPDATE_FILE.read_text(encoding="utf-8-sig")
+            state = json.loads(text) if text.strip() else {}
+        except (json.JSONDecodeError, ValueError):
+            state = {}
     else:
         state = {}
 
