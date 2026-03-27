@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
@@ -424,6 +424,7 @@ def generate_recommendations(
             "status": "no_matches",
             "message": "No overlapping prediction/odds matches found.",
             "recommendations": pd.DataFrame(),
+            "all_scored": pd.DataFrame(),
         }
 
     scored = _compute_edges(merged)
@@ -436,6 +437,7 @@ def generate_recommendations(
             "message": "SKIP TODAY - no value bets above threshold.",
             "closest": closest,
             "recommendations": pd.DataFrame(),
+            "all_scored": scored,
         }
 
     recs = _allocate_bankroll_with_overrides(
@@ -450,6 +452,7 @@ def generate_recommendations(
         "status": "value",
         "message": f"{len(recs)} value bet(s) detected",
         "recommendations": recs,
+        "all_scored": scored,
     }
 
 

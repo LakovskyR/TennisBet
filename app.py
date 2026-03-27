@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,8 +30,10 @@ from config import (
     RAW_WTA,
 )
 from src.data_pipeline import run_pipeline
-from src.data_updater import get_staleness_status, update_data_sources
+from src.data_updater import get_staleness_status, scrape_flashscore_results, update_data_sources
 from src.elo_engine import run_elo
+from src.tml_ingest import ingest as tml_ingest
+from src.wta_backfill import backfill_wta
 from src.odds_scraper import refresh_odds
 from src.predictor import predict_from_feature_file, predict_from_odds
 from src.sqlite_storage import (
@@ -462,11 +465,52 @@ def _ingest_uploaded_odds_csv(uploaded_file: Any, default_tour: str | None) -> t
     return True, f"Imported {len(prepared)} odds row(s) into {ODDS_UPCOMING_FILE.name}."
 
 
-def _run_data_refresh() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    update_report = update_data_sources()
-    pipeline_report = run_pipeline(incremental=True)
-    elo_report = run_elo(incremental=True)
+def _run_data_refresh() -> dict[str, Any]:
+    report: dict[str, Any] = {"steps": {}, "warnings": []}
 
+    # 1. TML ingest (ATP from TML-Database)
+    try:
+        report["steps"]["tml_ingest"] = tml_ingest(years=[2025, 2026])
+    except Exception as exc:
+        report["warnings"].append(f"TML ingest failed: {exc}")
+        report["steps"]["tml_ingest"] = {"status": "error", "message": str(exc)}
+
+    # 2. Flashscore results scrape (recent finished matches)
+    try:
+        report["steps"]["flashscore_results"] = scrape_flashscore_results()
+    except Exception as exc:
+        report["warnings"].append(f"Flashscore results scrape failed: {exc}")
+        report["steps"]["flashscore_results"] = {"status": "error", "message": str(exc)}
+
+    # 3. Sackmann git pull (latest raw data)
+    try:
+        report["steps"]["sackmann_update"] = update_data_sources()
+    except Exception as exc:
+        report["warnings"].append(f"Sackmann update failed: {exc}")
+        report["steps"]["sackmann_update"] = {"status": "error", "message": str(exc)}
+
+    # 4. WTA backfill (Tennis Explorer via Firecrawl)
+    try:
+        report["steps"]["wta_backfill"] = backfill_wta(years=[2025, 2026])
+    except Exception as exc:
+        report["warnings"].append(f"WTA backfill failed: {exc}")
+        report["steps"]["wta_backfill"] = {"status": "error", "message": str(exc)}
+
+    # 5. Rebuild data pipeline
+    try:
+        report["steps"]["pipeline"] = run_pipeline(incremental=True)
+    except Exception as exc:
+        report["warnings"].append(f"Pipeline failed: {exc}")
+        report["steps"]["pipeline"] = {"status": "error", "message": str(exc)}
+
+    # 6. ELO ratings
+    try:
+        report["steps"]["elo"] = run_elo(incremental=True)
+    except Exception as exc:
+        report["warnings"].append(f"ELO update failed: {exc}")
+        report["steps"]["elo"] = {"status": "error", "message": str(exc)}
+
+    # Update staleness
     state = _load_last_update()
     if state.get("last_new_match"):
         try:
@@ -476,7 +520,7 @@ def _run_data_refresh() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]
         except Exception:
             pass
 
-    return update_report, pipeline_report, elo_report
+    return report
 
 
 def _count_matches(tour: str) -> int:
@@ -697,6 +741,50 @@ def _render_recommendations(
         elif rec.get("status") == "no_matches":
             st.caption(f"{tour.upper()}: {rec.get('message')}")
 
+    # --- Today's Matches Table ---
+    all_scored_parts: list[pd.DataFrame] = []
+    for tour in _tour_list(tour_filter):
+        rec = results.get(tour, {})
+        scored_df = rec.get("all_scored")
+        if isinstance(scored_df, pd.DataFrame) and not scored_df.empty:
+            scored_copy = scored_df.copy()
+            scored_copy["tour"] = tour.upper()
+            all_scored_parts.append(scored_copy)
+
+    if all_scored_parts:
+        all_scored = pd.concat(all_scored_parts, ignore_index=True)
+        all_scored["selected_edge"] = pd.to_numeric(all_scored.get("selected_edge"), errors="coerce").fillna(0.0)
+        all_scored["odds_p1"] = pd.to_numeric(all_scored.get("odds_p1"), errors="coerce")
+        all_scored["odds_p2"] = pd.to_numeric(all_scored.get("odds_p2"), errors="coerce")
+
+        def _suggestion(row: pd.Series) -> str:
+            edge = float(row.get("selected_edge", 0))
+            tier = str(row.get("confidence_tier", "")).upper()
+            if edge >= min_edge_threshold and tier == "HIGH":
+                return "\U0001f7e2 HIGH"
+            if edge >= min_edge_threshold:
+                return "\U0001f7e1 MEDIUM"
+            if edge >= min_edge_threshold * 0.5:
+                return "\U0001f535 LOW"
+            return "\u26aa SKIP"
+
+        all_scored["Suggestion"] = all_scored.apply(_suggestion, axis=1)
+        all_scored = all_scored.sort_values("selected_edge", ascending=False)
+
+        display_df = pd.DataFrame({
+            "Player 1": all_scored["p1_name"],
+            "Player 2": all_scored["p2_name"],
+            "Tour": all_scored["tour"],
+            "Odds P1": all_scored["odds_p1"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "-"),
+            "Odds P2": all_scored["odds_p2"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "-"),
+            "Edge": all_scored["selected_edge"].map(lambda v: f"{v:.1%}"),
+            "Confidence": all_scored.get("confidence_tier", pd.Series(dtype="string")).fillna("-").str.upper(),
+            "Suggestion": all_scored["Suggestion"],
+        })
+
+        with st.expander(f"Today's Matches ({len(display_df)})", expanded=True):
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
     return results
 
 
@@ -841,7 +929,22 @@ def _build_file_status() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _load_dotenv(path: Path = Path(".env")) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def main() -> None:
+    _load_dotenv()
     _bootstrap_files()
     bankroll_state = _load_bankroll_state()
     stored_capital = float(bankroll_state.get("capital", DEFAULT_CAPITAL))
@@ -876,37 +979,43 @@ def main() -> None:
             )
         )
 
-        if st.button("Update Data", type="primary"):
+        if st.button("Refresh All", type="primary"):
+            progress = st.empty()
+            # Step 1: Data refresh
             try:
-                with st.spinner("Pulling data, rebuilding pipeline, updating ELO..."):
-                    update_report, pipeline_report, elo_report = _run_data_refresh()
-                st.success("Data refresh completed.")
+                progress.info("① Updating data (TML ingest → Flashscore → Sackmann → WTA backfill → pipeline → ELO)...")
+                refresh_report = _run_data_refresh()
+                data_warnings = refresh_report.get("warnings", [])
+                if data_warnings:
+                    st.warning(f"Data: {len(data_warnings)} warning(s): " + "; ".join(data_warnings))
+                else:
+                    st.success("✓ Data refresh completed.")
                 state = _load_last_update()
-                st.json({"update": update_report, "pipeline": pipeline_report, "elo": elo_report})
             except Exception as exc:
                 st.error(f"Data refresh failed: {exc}")
 
-        if st.button("Refresh Odds"):
+            # Step 2: Odds refresh
             try:
-                with st.spinner("Refreshing odds (Flashscore fallback + normalization)..."):
-                    odds_report = refresh_odds()
-                st.success("Odds refresh completed.")
+                progress.info("② Refreshing odds...")
+                odds_report = refresh_odds()
+                st.success("✓ Odds refresh completed.")
                 odds_status = _odds_snapshot_status()
-                st.json(odds_report)
             except Exception as exc:
                 st.error(f"Odds refresh failed: {exc}")
 
-        if st.button("Refresh Predictions"):
+            # Step 3: Predictions
             try:
-                with st.spinner("Generating predictions from latest feature tables..."):
-                    outputs = _refresh_predictions(tour_filter=tour_filter)
+                progress.info("③ Generating predictions...")
+                outputs = _refresh_predictions(tour_filter=tour_filter)
                 if outputs:
-                    st.success("Predictions refreshed.")
+                    st.success("✓ Predictions refreshed.")
                     st.write("\n".join(outputs))
                 else:
-                    st.warning("No feature files found to predict.")
+                    st.warning("No upcoming odds to predict.")
             except Exception as exc:
                 st.error(f"Prediction refresh failed: {exc}")
+
+            progress.success("All done!")
 
         st.divider()
         with st.expander("Manual Odds Upload"):
@@ -1117,13 +1226,13 @@ def main() -> None:
 
                 calibration = _load_calibration(tour)
                 if not calibration.empty and {"avg_pred", "avg_true"}.issubset(calibration.columns):
-                    st.plotly_chart(_build_calibration_chart(calibration, tour), use_container_width=True)
+                    st.plotly_chart(_build_calibration_chart(calibration, tour), width="stretch")
                 else:
                     st.caption(f"{tour.upper()}: calibration data not available.")
 
                 importance = _load_feature_importance(tour)
                 if not importance.empty and {"model", "feature", "importance"}.issubset(importance.columns):
-                    st.plotly_chart(_build_feature_importance_chart(importance, tour), use_container_width=True)
+                    st.plotly_chart(_build_feature_importance_chart(importance, tour), width="stretch")
                 else:
                     st.caption(f"{tour.upper()}: feature importance data not available.")
 
@@ -1133,7 +1242,7 @@ def main() -> None:
             st.info("No backtest results yet.")
         else:
             filtered = backtest[backtest["tour"].astype("string").str.lower().isin(tours)].copy() if "tour" in backtest.columns else backtest.copy()
-            st.dataframe(filtered, use_container_width=True)
+            st.dataframe(filtered, width="stretch")
 
             equity_frames = []
             for tour in tours:
@@ -1157,7 +1266,7 @@ def main() -> None:
                     title="Backtest equity curve",
                 )
                 fig.update_layout(height=360, margin={"l": 20, "r": 20, "t": 40, "b": 20})
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
         st.markdown("### Recent Prediction Log")
         pred_log = _load_prediction_log()
@@ -1179,7 +1288,7 @@ def main() -> None:
                 "result",
                 "pnl",
             ]
-            st.dataframe(filtered_log.tail(30)[display_cols], use_container_width=True)
+            st.dataframe(filtered_log.tail(30)[display_cols], width="stretch")
 
     with tab3:
         st.subheader("Data Status")
@@ -1200,7 +1309,7 @@ def main() -> None:
         col8.metric("Odds age", f"{float(odds_status.get('age_hours', 0.0)):.1f}h" if odds_status.get("status") == "ok" else "n/a")
 
         st.markdown("### Core Artifacts")
-        st.dataframe(_build_file_status(), use_container_width=True)
+        st.dataframe(_build_file_status(), width="stretch")
 
         latest_predictions = []
         for tour in _tour_list(tour_filter):
@@ -1222,7 +1331,7 @@ def main() -> None:
                         "model_agreement",
                     ]
                 ],
-                use_container_width=True,
+                width="stretch",
             )
 
         with st.expander("Raw status payload"):
