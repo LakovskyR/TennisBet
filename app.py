@@ -947,8 +947,20 @@ def _load_dotenv(path: Path = Path(".env")) -> None:
             os.environ[key] = value
 
 
+def _load_streamlit_secrets() -> None:
+    try:
+        secret_items = st.secrets.items()
+    except Exception:
+        return
+
+    for key, value in secret_items:
+        if isinstance(value, (str, int, float, bool)) and key and key not in os.environ:
+            os.environ[key] = str(value)
+
+
 def main() -> None:
     _load_dotenv()
+    _load_streamlit_secrets()
     _bootstrap_files()
     bankroll_state = _load_bankroll_state()
     stored_capital = float(bankroll_state.get("capital", DEFAULT_CAPITAL))

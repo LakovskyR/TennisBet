@@ -51,6 +51,27 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Streamlit Cloud Secrets
+
+The app reads secrets from Streamlit Cloud and maps them into the environment
+for the scraper and email modules.
+
+Use [.streamlit/secrets.toml.example](.streamlit/secrets.toml.example) as the template
+for the Streamlit Cloud "Secrets" panel.
+
+Common keys:
+
+- `FIRECRAWL_API_KEY`
+- `RTRVR_API_KEY`
+- `PERPLEXITY_API_KEY`
+- `EMAIL_TO`
+- `EMAIL_FROM`
+- `EMAIL_PASSWORD`
+- `SMTP_HOST`
+- `SMTP_PORT`
+- `CHROME_BIN`
+- `CHROMEDRIVER_PATH`
+
 Optional CLI runs:
 
 ```bash
