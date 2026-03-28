@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,7 @@ from config import (
 from src.data_pipeline import run_pipeline
 from src.data_updater import get_staleness_status, scrape_flashscore_results, update_data_sources
 from src.elo_engine import run_elo
+from src.feature_engineering import build_features
 from src.tml_ingest import ingest as tml_ingest
 from src.wta_backfill import backfill_wta
 from src.odds_scraper import refresh_odds
@@ -182,6 +184,42 @@ def _safe_read_csv(path: Path, columns: list[str] | None = None) -> pd.DataFrame
         if col not in df.columns:
             df[col] = pd.NA
     return df[columns]
+
+
+def _is_git_lfs_pointer(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            first_line = handle.readline().strip()
+            second_line = handle.readline().strip()
+    except OSError:
+        return False
+    return first_line == "version https://git-lfs.github.com/spec/v1" and second_line.startswith("oid sha256:")
+
+
+def _missing_columns_from_error(exc: Exception) -> set[str]:
+    columns = {"winner_id", "loser_id", "score", "match_date"}
+    haystacks = [str(exc)]
+    for arg in getattr(exc, "args", ()):
+        if isinstance(arg, (list, tuple, set)):
+            haystacks.extend(str(item) for item in arg)
+        else:
+            haystacks.append(str(arg))
+    text = " ".join(haystacks)
+    return {col for col in columns if re.search(rf"\b{re.escape(col)}\b", text)}
+
+
+def _should_retry_pipeline_full_rebuild(exc: Exception) -> bool:
+    if _missing_columns_from_error(exc) & {"winner_id", "loser_id", "score"}:
+        return True
+    return any(_is_git_lfs_pointer(PROCESSED_DIR / f"{tour}_matches_master.csv") for tour in ("atp", "wta"))
+
+
+def _should_retry_elo_full_rebuild(exc: Exception) -> bool:
+    if "match_date" in _missing_columns_from_error(exc):
+        return True
+    return any(_is_git_lfs_pointer(PROCESSED_DIR / f"{tour}_elo_ratings.csv") for tour in ("atp", "wta"))
 
 
 def _format_pct(value: Any, digits: int = 1) -> str:
@@ -504,15 +542,44 @@ def _run_data_refresh() -> dict[str, Any]:
     try:
         report["steps"]["pipeline"] = run_pipeline(incremental=True)
     except Exception as exc:
-        report["warnings"].append(f"Pipeline failed: {exc}")
-        report["steps"]["pipeline"] = {"status": "error", "message": str(exc)}
+        if _should_retry_pipeline_full_rebuild(exc):
+            try:
+                report["steps"]["pipeline"] = {
+                    "mode": "full_rebuild",
+                    "recovered_from": str(exc),
+                    "result": run_pipeline(incremental=False),
+                }
+            except Exception as retry_exc:
+                report["warnings"].append(f"Pipeline failed: {exc}; full rebuild failed: {retry_exc}")
+                report["steps"]["pipeline"] = {"status": "error", "message": str(retry_exc)}
+        else:
+            report["warnings"].append(f"Pipeline failed: {exc}")
+            report["steps"]["pipeline"] = {"status": "error", "message": str(exc)}
 
     # 6. ELO ratings
     try:
         report["steps"]["elo"] = run_elo(incremental=True)
     except Exception as exc:
-        report["warnings"].append(f"ELO update failed: {exc}")
-        report["steps"]["elo"] = {"status": "error", "message": str(exc)}
+        if _should_retry_elo_full_rebuild(exc):
+            try:
+                report["steps"]["elo"] = {
+                    "mode": "full_rebuild",
+                    "recovered_from": str(exc),
+                    "result": run_elo(incremental=False),
+                }
+            except Exception as retry_exc:
+                report["warnings"].append(f"ELO update failed: {exc}; full rebuild failed: {retry_exc}")
+                report["steps"]["elo"] = {"status": "error", "message": str(retry_exc)}
+        else:
+            report["warnings"].append(f"ELO update failed: {exc}")
+            report["steps"]["elo"] = {"status": "error", "message": str(exc)}
+
+    # 7. Feature refresh for latest matches/ELO; this does not retrain models.
+    try:
+        report["steps"]["features"] = build_features(tours=("atp", "wta"))
+    except Exception as exc:
+        report["warnings"].append(f"Feature refresh failed: {exc}")
+        report["steps"]["features"] = {"status": "error", "message": str(exc)}
 
     # Update staleness
     state = _load_last_update()
@@ -562,7 +629,8 @@ def _count_predicted_matches(tour_filter: str) -> int:
 
 def _refresh_predictions(tour_filter: str) -> list[str]:
     outputs: list[str] = []
-    for tour in _tour_list(tour_filter):
+    tours = tuple(_tour_list(tour_filter))
+    for tour in tours:
         output_path = PROCESSED_DIR / f"{tour}_predictions.csv"
         pred = predict_from_odds(tour=tour, output_path=output_path)
         if pred.empty:

@@ -7,6 +7,8 @@ import logging
 import pickle
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -15,15 +17,11 @@ import numpy as np
 import pandas as pd
 
 from config import (
-    CATBOOST_WEIGHT,
-    CATBOOST_WEIGHT_WTA,
     MODELS_DIR,
     ODDS_UPCOMING_FILE,
     PROCESSED_DIR,
     RAW_ATP,
     RAW_WTA,
-    XGBOOST_WEIGHT,
-    XGBOOST_WEIGHT_WTA,
 )
 from src.player_aliases import canonicalize_player_name, load_player_aliases, normalize_player_name
 from src.sqlite_storage import load_matches_frame, load_odds_frame
@@ -45,9 +43,10 @@ except Exception:  # pragma: no cover
 
 
 logger = logging.getLogger("predictor")
+DEFAULT_ENSEMBLE_MODEL_ORDER = ("catboost", "xgboost", "lgbm")
 DEFAULT_ENSEMBLE_CONFIG = {
-    "winner": "cat60_xgb40",
-    "weights": {"catboost": 3 / 5, "xgboost": 2 / 5},
+    "winner": "top3_equal",
+    "weights": {model_name: 1 / 3 for model_name in DEFAULT_ENSEMBLE_MODEL_ORDER},
 }
 
 
@@ -75,47 +74,71 @@ def _model_artifact_path(tour: str, model_name: str) -> Path:
         "rf": f"rf_{tour}.pkl",
         "elasticnet": f"elasticnet_{tour}.pkl",
         "logreg": f"logreg_{tour}.pkl",
+        "ridge": f"ridge_{tour}.pkl",
     }
     return MODELS_DIR / suffixes[model_name]
 
 
-def _tour_cat_xgb_weights(tour: str) -> dict[str, float]:
-    if str(tour).lower() == "wta":
-        return {"catboost": float(CATBOOST_WEIGHT_WTA), "xgboost": float(XGBOOST_WEIGHT_WTA)}
-    return {"catboost": float(CATBOOST_WEIGHT), "xgboost": float(XGBOOST_WEIGHT)}
-
-
-def _default_ensemble_config(tour: str) -> dict[str, Any]:
-    weights = _tour_cat_xgb_weights(tour)
-    cat_pct = int(round(weights["catboost"] * 100))
-    xgb_pct = int(round(weights["xgboost"] * 100))
+def _equal_weight_config(model_names: tuple[str, ...] = DEFAULT_ENSEMBLE_MODEL_ORDER) -> dict[str, Any]:
+    active_models = tuple(dict.fromkeys(str(name) for name in model_names if str(name)))
+    if not active_models:
+        active_models = DEFAULT_ENSEMBLE_MODEL_ORDER
+    weight = 1.0 / len(active_models)
     return {
-        "winner": f"cat{cat_pct}_xgb{xgb_pct}",
-        "weights": weights,
+        "winner": "_".join(active_models) + "_equal",
+        "weights": {model_name: weight for model_name in active_models},
     }
 
 
-def _apply_tour_specific_default_blend(tour: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _extract_ensemble_config(payload: dict[str, Any]) -> dict[str, Any]:
     weights = payload.get("weights")
-    if not isinstance(weights, dict) or set(weights.keys()) != {"catboost", "xgboost"}:
-        return payload
-    winner = str(payload.get("winner", ""))
-    if not (winner.startswith("cat") and "xgb" in winner):
-        return payload
-    payload = dict(payload)
-    payload["weights"] = _tour_cat_xgb_weights(tour)
-    return payload
+    if not isinstance(weights, dict) or not weights:
+        return {}
+    return {
+        "winner": str(payload.get("winner") or payload.get("name") or "ensemble"),
+        "weights": {str(name): float(weight) for name, weight in weights.items()},
+        **{
+            key: payload[key]
+            for key in ("cv_log_loss", "cv_brier", "cv_accuracy", "selection_date")
+            if key in payload
+        },
+    }
+
+
+def _load_report_ensemble_config(tour: str) -> dict[str, Any]:
+    path = MODELS_DIR / f"model_report_{tour}.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = _safe_json_load(path)
+    except Exception:
+        return {}
+    for candidate in (
+        payload.get("ensemble_config"),
+        payload.get("temporal_cv", {}).get("winner_row"),
+        payload.get("winner_row"),
+    ):
+        if isinstance(candidate, dict):
+            config = _extract_ensemble_config(candidate)
+            if config:
+                return config
+    return {}
 
 
 def _load_ensemble_config(tour: str) -> dict[str, Any]:
     path = MODELS_DIR / f"ensemble_config_{tour}.json"
-    if not path.exists():
-        return _default_ensemble_config(tour)
-    payload = _safe_json_load(path)
-    weights = payload.get("weights")
-    if not isinstance(weights, dict) or not weights:
-        return _default_ensemble_config(tour)
-    return _apply_tour_specific_default_blend(tour, payload)
+    if path.exists():
+        try:
+            payload = _safe_json_load(path)
+        except Exception:
+            payload = {}
+        config = _extract_ensemble_config(payload) if isinstance(payload, dict) else {}
+        if config:
+            return config
+    report_config = _load_report_ensemble_config(tour)
+    if report_config:
+        return report_config
+    return _equal_weight_config()
 
 
 def _sanitize_columns(cols: list[str]) -> list[str]:
@@ -134,38 +157,78 @@ def _sanitize_columns(cols: list[str]) -> list[str]:
     return out
 
 
+def _is_git_lfs_pointer(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            first_line = handle.readline().strip()
+            second_line = handle.readline().strip()
+    except OSError:
+        return False
+    return first_line == "version https://git-lfs.github.com/spec/v1" and second_line.startswith("oid sha256:")
+
+
+@lru_cache(maxsize=8)
+def _lightgbm_artifact_is_loadable(path_str: str) -> bool:
+    path = Path(path_str)
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    probe = (
+        f"from lightgbm import Booster\n"
+        f"Booster(model_file=r'''{path}''')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def _load_single_model(model_name: str, path: Path) -> Any | None:
     if not path.exists():
         logger.warning("Missing %s artifact: %s", model_name, path)
         return None
-    if model_name == "catboost":
-        if CatBoostClassifier is None:
-            logger.warning("CatBoost not installed; skipping catboost")
-            return None
-        model = CatBoostClassifier()
-        model.load_model(str(path))
-        return model
-    if model_name == "xgboost":
-        if XGBClassifier is None:
-            logger.warning("XGBoost not installed; skipping xgboost")
-            return None
-        model = XGBClassifier()
-        model.load_model(str(path))
-        return model
-    if model_name == "lgbm":
-        if LGBMBooster is None:
-            logger.warning("LightGBM not installed; skipping lgbm")
-            return None
-        with tempfile.NamedTemporaryFile(prefix="tennisbet_lgbm_", suffix=".txt", delete=False) as handle:
-            temp_path = Path(handle.name)
-        try:
-            shutil.copyfile(path, temp_path)
-            return LGBMBooster(model_file=str(temp_path))
-        finally:
-            if temp_path.exists():
-                temp_path.unlink()
-    with path.open("rb") as handle:
-        return pickle.load(handle)
+    if _is_git_lfs_pointer(path):
+        logger.warning("Skipping %s artifact stored as Git LFS pointer: %s", model_name, path)
+        return None
+    try:
+        if model_name == "catboost":
+            if CatBoostClassifier is None:
+                logger.warning("CatBoost not installed; skipping catboost")
+                return None
+            model = CatBoostClassifier()
+            model.load_model(str(path))
+            return model
+        if model_name == "xgboost":
+            if XGBClassifier is None:
+                logger.warning("XGBoost not installed; skipping xgboost")
+                return None
+            model = XGBClassifier()
+            model.load_model(str(path))
+            return model
+        if model_name == "lgbm":
+            if LGBMBooster is None:
+                logger.warning("LightGBM not installed; skipping lgbm")
+                return None
+            if not _lightgbm_artifact_is_loadable(str(path.resolve())):
+                logger.warning("Skipping invalid LightGBM artifact: %s", path)
+                return None
+            with tempfile.NamedTemporaryFile(prefix="tennisbet_lgbm_", suffix=".txt", delete=False) as handle:
+                temp_path = Path(handle.name)
+            try:
+                shutil.copyfile(path, temp_path)
+                return LGBMBooster(model_file=str(temp_path))
+            finally:
+                if temp_path.exists():
+                    temp_path.unlink()
+        with path.open("rb") as handle:
+            return pickle.load(handle)
+    except Exception as exc:
+        logger.warning("Skipping unloadable %s artifact %s: %s", model_name, path.name, exc)
+        return None
 
 
 def _normalize_weights(weights: dict[str, float]) -> dict[str, float]:
@@ -279,7 +342,7 @@ def add_prediction_columns(df: pd.DataFrame, tour: str) -> pd.DataFrame:
     interval_upper = np.clip(ensemble_prob + interval_radius, 0.0, 1.0)
 
     out = df.copy()
-    for model_name in ["catboost", "xgboost", "lgbm", "rf", "elasticnet", "logreg"]:
+    for model_name in ["catboost", "xgboost", "lgbm", "rf", "elasticnet", "logreg", "ridge"]:
         out[f"{model_name}_prob"] = probability_map.get(model_name, np.nan)
     out["ensemble_prob_p1"] = ensemble_prob
     out["ensemble_prob_p1_lower"] = interval_lower
@@ -336,6 +399,9 @@ def _resolve_tournament_country(name: Any, exact: dict[str, str], norm: dict[str
 
 
 def _build_player_states(feature_df: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    required = {"match_date", "match_key", "p1_id", "p2_id"}
+    if feature_df.empty or not required.issubset(feature_df.columns):
+        return {}
     feature_df = feature_df.copy()
     feature_df["match_date"] = pd.to_datetime(feature_df["match_date"], errors="coerce")
     feature_df = feature_df[feature_df["match_date"].notna()].sort_values(["match_date", "match_key"])
@@ -449,6 +515,10 @@ def predict_from_odds(
     if not feature_path.exists():
         return pd.DataFrame()
     hist = pd.read_csv(feature_path, low_memory=False)
+    required_feature_cols = {"match_date", "match_key", "p1_id", "p2_id"}
+    if not required_feature_cols.issubset(hist.columns):
+        logger.warning("Skipping odds prediction for %s: invalid feature artifact %s", tour, feature_path)
+        return pd.DataFrame()
     states = _build_player_states(hist)
 
     _, _, schema = _load_models_and_schema(tour)

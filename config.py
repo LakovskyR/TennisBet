@@ -44,10 +44,6 @@ TOURNAMENT_WEIGHTS = {
 SURFACE_LIST = ["Hard", "Clay", "Grass", "Carpet"]
 
 # Model
-CATBOOST_WEIGHT = 0.6
-XGBOOST_WEIGHT = 0.4
-CATBOOST_WEIGHT_WTA = 0.3
-XGBOOST_WEIGHT_WTA = 0.7
 OPTUNA_TRIALS = 50
 TRAIN_CUTOFF = (date.today() - timedelta(days=180)).strftime("%Y-%m-%d")
 

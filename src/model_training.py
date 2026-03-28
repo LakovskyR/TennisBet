@@ -10,6 +10,7 @@ import re
 import shutil
 import sys
 import tempfile
+from itertools import combinations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -47,7 +48,7 @@ try:
 except Exception:  # pragma: no cover
     optuna = None
 
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -64,13 +65,14 @@ DEFAULT_ENSEMBLE_WEIGHTS = {
     "winner": "cat60_xgb40",
     "weights": {"catboost": 3 / 5, "xgboost": 2 / 5},
 }
-BASE_MODEL_ORDER = ["catboost", "xgboost", "lgbm", "elasticnet", "logreg"]
+BASE_MODEL_ORDER = ["catboost", "xgboost", "lgbm", "elasticnet", "logreg", "ridge"]
 BASE_MODEL_LABELS = {
     "catboost": "catboost",
     "xgboost": "xgboost",
     "lgbm": "lgbm",
     "elasticnet": "elasticnet",
     "logreg": "logreg",
+    "ridge": "ridge",
 }
 log = logging.getLogger("model_training")
 
@@ -187,6 +189,7 @@ def _artifacts_for_tour(tour: str) -> dict[str, Path]:
         "lgbm_model": MODELS_DIR / f"lgbm_{tour}.txt",
         "elasticnet_model": MODELS_DIR / f"elasticnet_{tour}.pkl",
         "logreg_model": MODELS_DIR / f"logreg_{tour}.pkl",
+        "ridge_model": MODELS_DIR / f"ridge_{tour}.pkl",
         "ensemble_config": MODELS_DIR / f"ensemble_config_{tour}.json",
         "preprocess": MODELS_DIR / f"preprocess_{tour}.json",
         "report": MODELS_DIR / f"model_report_{tour}.json",
@@ -678,7 +681,7 @@ def _available_model_names() -> list[str]:
     else:
         available.append("lgbm")
 
-    available.extend(["elasticnet", "logreg"])
+    available.extend(["elasticnet", "logreg", "ridge"])
     return available
 
 
@@ -773,6 +776,12 @@ def _default_model_params(model_name: str, *, fast: bool) -> dict[str, Any]:
             "C": 1.0,
             "random_state": 42,
         }
+    if model_name == "ridge":
+        return {
+            "alpha": 0.0001,
+            "max_iter": 3000,
+            "random_state": 42,
+        }
     raise KeyError(f"Unsupported model: {model_name}")
 
 
@@ -790,6 +799,8 @@ def _best_param_keys(model_name: str) -> set[str]:
         }
     if model_name == "elasticnet":
         return {"C", "l1_ratio", "max_iter"}
+    if model_name == "ridge":
+        return {"alpha", "max_iter"}
     return set()
 
 
@@ -909,11 +920,15 @@ def _fit_model(
         model = LGBMClassifier(**params)
         model.fit(matrices["x_train_tab"], matrices["y_train"])
         return model
-    if model_name in {"elasticnet", "logreg"}:
+    if model_name in {"elasticnet", "logreg", "ridge"}:
+        if model_name == "ridge":
+            clf = SGDClassifier(loss="log_loss", penalty="l2", **params)
+        else:
+            clf = LogisticRegression(**params)
         model = Pipeline(
             [
                 ("scaler", StandardScaler()),
-                ("clf", LogisticRegression(**params)),
+                ("clf", clf),
             ]
         )
         model.fit(matrices["x_train_tab"], matrices["y_train"])
@@ -934,6 +949,7 @@ def _model_artifact_path(tour: str, model_name: str) -> Path:
         "lgbm": f"lgbm_{tour}.txt",
         "elasticnet": f"elasticnet_{tour}.pkl",
         "logreg": f"logreg_{tour}.pkl",
+        "ridge": f"ridge_{tour}.pkl",
     }
     return MODELS_DIR / suffixes[model_name]
 
@@ -1386,15 +1402,32 @@ def _run_temporal_cv(
     ranked_models = [row["name"] for row in sorted(comparison_rows, key=lambda row: row["cv_log_loss"])]
 
     ensemble_candidates: list[tuple[str, dict[str, float]]] = []
-    if {"catboost", "xgboost"}.issubset(model_params):
-        ensemble_candidates.append(("cat85_xgb15", {"catboost": 0.85, "xgboost": 0.15}))
-        ensemble_candidates.append(("cat60_xgb40", {"catboost": 3 / 5, "xgboost": 2 / 5}))
-    if {"catboost", "lgbm"}.issubset(model_params):
-        ensemble_candidates.append(("cat70_lgbm30", {"catboost": 0.70, "lgbm": 0.30}))
+    trained_models = list(model_params.keys())
+    seen_candidates: set[tuple[tuple[str, float], ...]] = set()
+
+    def add_candidate(name: str, weights: dict[str, float]) -> None:
+        normalized = {model_name: float(weight) for model_name, weight in weights.items() if float(weight) > 0}
+        if not normalized:
+            return
+        signature = tuple(sorted((model_name, round(weight, 6)) for model_name, weight in normalized.items()))
+        if signature in seen_candidates:
+            return
+        seen_candidates.add(signature)
+        ensemble_candidates.append((name, normalized))
+
+    for a, b in combinations(trained_models, 2):
+        add_candidate(f"{a}50_{b}50", {a: 0.5, b: 0.5})
+        add_candidate(f"{a}70_{b}30", {a: 0.7, b: 0.3})
+        add_candidate(f"{a}30_{b}70", {a: 0.3, b: 0.7})
+    for combo in combinations(trained_models, 3):
+        name = "_".join(combo)
+        add_candidate(f"{name}_equal", {model_name: 1 / 3 for model_name in combo})
     if len(ranked_models) >= 2:
-        ensemble_candidates.append(("top2_equal", {name: 0.5 for name in ranked_models[:2]}))
+        add_candidate("top2_equal", {name: 0.5 for name in ranked_models[:2]})
     if len(ranked_models) >= 3:
-        ensemble_candidates.append(("top3_equal", {name: 1.0 / 3.0 for name in ranked_models[:3]}))
+        add_candidate("top3_equal", {name: 1 / 3 for name in ranked_models[:3]})
+    if len(ranked_models) >= 4:
+        add_candidate("top4_equal", {name: 0.25 for name in ranked_models[:4]})
 
     for candidate_name, weights in ensemble_candidates:
         candidate_rows: list[dict[str, Any]] = []
@@ -1455,7 +1488,7 @@ def _train_and_score_split(
     if not available_models:
         raise RuntimeError("No supported models are available for training.")
 
-    tuning_report: dict[str, Any] = {"catboost": None, "xgboost": None, "lgbm": None}
+    tuning_report: dict[str, Any] = {"catboost": None, "xgboost": None, "lgbm": None, "ridge": None}
     tuned_params: dict[str, dict[str, Any]] = {}
     train_core, val_core = _split_train_validation(train_df)
     should_tune = use_optuna and optuna is not None and optuna_trials > 0 and len(train_core) > 500 and len(val_core) > 100
@@ -1743,6 +1776,7 @@ def train_for_tour(
         "rf_params": final_params.get("rf"),
         "elasticnet_params": final_params.get("elasticnet"),
         "logreg_params": final_params.get("logreg"),
+        "ridge_params": final_params.get("ridge"),
         "selection": split_result["selection"],
         "best_params_files": {
             "catboost": str(_best_params_path(tour, "catboost")),
