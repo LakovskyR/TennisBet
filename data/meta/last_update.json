@@ -1,13 +1,13 @@
 {
   "initialized_at": "2026-03-14T00:00:00Z",
-  "last_new_match": "2026-03-21",
+  "last_new_match": "2026-03-28",
   "staleness": {
-    "days_behind": 0,
+    "days_behind": 1,
     "status": "fresh",
     "message": "Data is fresh."
   },
-  "updated_at": "2026-03-21T17:21:05Z",
-  "sackmann_pull": "2026-03-21T17:21:05Z",
+  "updated_at": "2026-03-29T08:03:54Z",
+  "sackmann_pull": "2026-03-29T08:03:54Z",
   "tours": {
     "atp": {
       "success": true,
@@ -22,54 +22,54 @@
       "method": "git",
       "message": "Already up to date.",
       "rows_added": 0,
-      "latest_raw_match_date": "2024-11-25",
+      "latest_raw_match_date": "2026-03-05",
       "git_success": true
     }
   },
-  "pipeline_last_run": "2026-03-21T17:31:54Z",
+  "pipeline_last_run": "2026-03-29T08:04:37Z",
   "pipeline": {
     "atp": {
       "tour": "atp",
-      "output": "/home/runner/work/TennisBet/TennisBet/data/processed/atp_matches_master.csv",
-      "rows": 198255,
-      "rows_added": 83,
-      "latest_match_date": "2026-03-21"
+      "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\atp_matches_master.csv",
+      "rows": 198258,
+      "rows_added": 0,
+      "latest_match_date": "2026-03-28"
     },
     "wta": {
       "tour": "wta",
-      "output": "/home/runner/work/TennisBet/TennisBet/data/processed/wta_matches_master.csv",
-      "rows": 160970,
-      "rows_added": 462,
-      "latest_match_date": "2026-03-21"
+      "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\wta_matches_master.csv",
+      "rows": 160971,
+      "rows_added": 0,
+      "latest_match_date": "2026-03-27"
     }
   },
-  "elo_last_run": "2026-03-20T10:22:43Z",
+  "elo_last_run": "2026-03-29T08:05:53Z",
   "elo": {
     "atp": {
       "tour": "atp",
       "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\atp_elo_ratings.csv",
-      "rows": 385446,
+      "rows": 385638,
       "processed_matches": 0,
       "snapshot": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\atp_elo_snapshot.csv"
     },
     "wta": {
       "tour": "wta",
       "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\wta_elo_ratings.csv",
-      "rows": 313008,
+      "rows": 313944,
       "processed_matches": 0,
       "snapshot": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\wta_elo_snapshot.csv"
     }
   },
-  "feature_last_run": "2026-03-20T10:25:37Z",
-  "feature_rows": 349224,
+  "feature_last_run": "2026-03-29T08:09:58Z",
+  "feature_rows": 349788,
   "feature_outputs": {
     "atp": {
       "tour": "atp",
       "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\atp_player_features.csv",
-      "rows": 192721,
-      "ioc_coverage": 0.9997976349230234,
+      "rows": 192817,
+      "ioc_coverage": 0.9997640249563057,
       "checks": {
-        "rows": 192721,
+        "rows": 192817,
         "days_since_non_negative": true,
         "win_pct_bounds": true,
         "h2h_consistent": true
@@ -78,10 +78,10 @@
     "wta": {
       "tour": "wta",
       "output": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\wta_player_features.csv",
-      "rows": 156503,
-      "ioc_coverage": 0.9993514501319464,
+      "rows": 156971,
+      "ioc_coverage": 0.999311974823375,
       "checks": {
-        "rows": 156503,
+        "rows": 156971,
         "days_since_non_negative": true,
         "win_pct_bounds": true,
         "h2h_consistent": true
@@ -89,13 +89,13 @@
     },
     "combined": "C:\\Users\\lakov\\OneDrive\\\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b\\PROJECTS\\bet\\data\\processed\\player_features.csv"
   },
-  "model_last_trained": "2026-03-20T21:19:32Z",
+  "model_last_trained": "2026-03-29T06:38:34Z",
   "model_training": {
     "tours": [
       "atp",
       "wta"
     ],
-    "train_cutoff": "2025-09-21",
+    "train_cutoff": "2025-09-29",
     "fallback_latest_months": 3,
     "cv_folds": 3,
     "report_files": {

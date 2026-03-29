@@ -1,12 +1,12 @@
 {
-  "winner": "top3_equal",
+  "winner": "catboost_xgboost_lgbm_equal",
   "weights": {
+    "catboost": 0.3333333333333333,
     "xgboost": 0.3333333333333333,
-    "lgbm": 0.3333333333333333,
-    "catboost": 0.3333333333333333
+    "lgbm": 0.3333333333333333
   },
-  "cv_log_loss": 0.5065578569395032,
-  "cv_brier": 0.17284903658327863,
-  "cv_accuracy": 0.7294822806623212,
-  "selection_date": "2026-03-20"
+  "cv_log_loss": 0.5067030406962445,
+  "cv_brier": 0.17293555023533766,
+  "cv_accuracy": 0.7300092667324306,
+  "selection_date": "2026-03-29"
 }

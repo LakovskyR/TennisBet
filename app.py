@@ -116,7 +116,6 @@ ODDS_UPLOAD_COLUMNS = [
     "captured_at",
 ]
 
-
 def _ensure_file(path: Path, columns: list[str] | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
@@ -1026,6 +1025,377 @@ def _load_streamlit_secrets() -> None:
             os.environ[key] = str(value)
 
 
+def _render_dashboard_overview(
+    *,
+    state: dict[str, Any],
+    odds_status: dict[str, Any],
+    capital: float,
+    tour_filter: str,
+) -> None:
+    pred_log = _load_prediction_log()
+    open_bets = int(pred_log["status"].astype("string").fillna("").str.lower().eq("open").sum()) if not pred_log.empty else 0
+    total_matches = _count_matches("atp") + _count_matches("wta")
+    predicted_matches = _count_predicted_matches(tour_filter)
+    update_stamp = state.get("updated_at", "never")
+    odds_message = odds_status.get("message", "No odds snapshot available.")
+
+    summary_cards = [
+        ("Bankroll", _format_currency(capital), "Active capital"),
+        ("Predicted", str(predicted_matches), "Matches on board"),
+        ("Open bets", str(open_bets), "Unsettled positions"),
+        ("Database", f"{total_matches:,}", "Historical matches"),
+    ]
+    cards_html = "".join(
+        f"""
+        <div class="summary-card">
+            <span class="summary-label">{label}</span>
+            <strong>{value}</strong>
+            <span class="summary-meta">{meta}</span>
+        </div>
+        """
+        for label, value, meta in summary_cards
+    )
+
+    st.markdown(
+        f"""
+        <section class="hero-shell">
+            <div class="hero-copy">
+                <span class="eyebrow">TennisBet Control Room</span>
+                <h1>Sharper pre-match decisions, framed like a trading desk.</h1>
+                <p>
+                    Live recommendation flow for ATP and WTA, with bankroll control, freshness checks,
+                    and model diagnostics in one place.
+                </p>
+                <div class="hero-pills">
+                    <span>Tour: {str(tour_filter).upper()}</span>
+                    <span>Updated: {update_stamp}</span>
+                    <span>{odds_message}</span>
+                </div>
+            </div>
+            <div class="hero-grid">
+                {cards_html}
+            </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_section_heading(title: str, detail: str) -> None:
+    st.markdown(
+        f"""
+        <div class="section-heading">
+            <h2>{title}</h2>
+            <p>{detail}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def inject_css() -> None:
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+        :root {
+            --bg-main: #0f1714;
+            --bg-panel: rgba(21, 35, 29, 0.74);
+            --bg-panel-strong: rgba(17, 28, 24, 0.92);
+            --bg-accent: #d67a31;
+            --bg-accent-soft: rgba(214, 122, 49, 0.16);
+            --bg-accent-alt: #79a88f;
+            --text-main: #f4efe7;
+            --text-muted: #c7c0b4;
+            --border-soft: rgba(244, 239, 231, 0.09);
+            --shadow-strong: 0 24px 60px rgba(0, 0, 0, 0.34);
+        }
+
+        html, body, [class*="css"] {
+            font-family: 'IBM Plex Sans', sans-serif;
+        }
+
+        .stApp {
+            background: 
+                radial-gradient(circle at 12% 12%, rgba(214, 122, 49, 0.18), transparent 30%),
+                radial-gradient(circle at 86% 10%, rgba(121, 168, 143, 0.16), transparent 28%),
+                linear-gradient(180deg, #09100d 0%, #0f1714 48%, #131b17 100%);
+            color: var(--text-main);
+        }
+
+        .block-container {
+            max-width: 1380px;
+            padding-top: 1.4rem;
+            padding-bottom: 2.5rem;
+        }
+
+        h1, h2, h3, h4, h5, h6 {
+            font-family: 'Space Grotesk', sans-serif;
+            letter-spacing: -0.02em;
+            color: var(--text-main);
+        }
+
+        .hero-shell {
+            display: grid;
+            grid-template-columns: minmax(0, 1.4fr) minmax(320px, 1fr);
+            gap: 1rem;
+            align-items: stretch;
+            margin-bottom: 1.4rem;
+        }
+
+        .hero-copy,
+        .hero-grid {
+            background: linear-gradient(180deg, rgba(23, 37, 31, 0.9), rgba(16, 26, 22, 0.88));
+            border: 1px solid var(--border-soft);
+            border-radius: 28px;
+            box-shadow: var(--shadow-strong);
+        }
+
+        .hero-copy {
+            padding: 2rem 2rem 1.7rem;
+        }
+
+        .hero-copy h1 {
+            margin: 0.35rem 0 0.8rem;
+            font-size: clamp(2.2rem, 4vw, 4rem);
+            font-weight: 800;
+            line-height: 0.94;
+            max-width: 10ch;
+            background: linear-gradient(92deg, #fff8ef 0%, #f0c596 42%, #8fc4a6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero-copy p {
+            margin: 0;
+            color: var(--text-muted);
+            font-size: 1rem;
+            line-height: 1.6;
+            max-width: 52rem;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.45rem 0.8rem;
+            border-radius: 999px;
+            font-size: 0.76rem;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: #ffe5cb;
+            background: var(--bg-accent-soft);
+            border: 1px solid rgba(214, 122, 49, 0.34);
+        }
+
+        .hero-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.65rem;
+            margin-top: 1.2rem;
+        }
+
+        .hero-pills span {
+            display: inline-flex;
+            align-items: center;
+            min-height: 2rem;
+            padding: 0.45rem 0.8rem;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            color: #e7ddd0;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .hero-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.9rem;
+            padding: 1rem;
+        }
+
+        .summary-card {
+            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+            border: 1px solid var(--border-soft);
+            border-radius: 22px;
+            padding: 1rem 1.05rem;
+            min-height: 124px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .summary-card strong {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .summary-label,
+        .summary-meta {
+            color: var(--text-muted);
+        }
+
+        .summary-label {
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .summary-meta {
+            font-size: 0.85rem;
+        }
+
+        .section-heading {
+            margin: 0.15rem 0 1rem;
+        }
+
+        .section-heading h2 {
+            margin: 0;
+            font-size: 1.45rem;
+        }
+
+        .section-heading p {
+            margin: 0.2rem 0 0;
+            color: var(--text-muted);
+        }
+
+        [data-testid="stSidebar"] {
+            background:
+                linear-gradient(180deg, rgba(20, 31, 27, 0.98), rgba(11, 17, 15, 0.98)) !important;
+            border-right: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        [data-testid="stMetric"] {
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255,255,255,0.015));
+            border: 1px solid var(--border-soft);
+            border-radius: 20px;
+            padding: 1rem 1.1rem;
+            box-shadow: 0 14px 30px rgba(0, 0, 0, 0.18);
+            transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+        }
+
+        [data-testid="stMetric"]:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 18px 34px rgba(0, 0, 0, 0.24);
+        }
+
+        [data-testid="stMetricValue"] {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 2rem !important;
+            font-weight: 700 !important;
+            color: var(--text-main) !important;
+        }
+
+        [data-testid="stMetricLabel"] {
+            color: var(--text-muted) !important;
+            font-size: 0.82rem !important;
+            font-weight: 500 !important;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        [data-testid="baseButton-primary"] {
+            background: linear-gradient(135deg, #cb6b29 0%, #e79a4e 100%) !important;
+            border: none !important;
+            border-radius: 14px !important;
+            color: #1c130c !important;
+            font-weight: 600 !important;
+            letter-spacing: 0.05em !important;
+            padding: 0.75rem 1.5rem !important;
+            transition: all 0.3s ease !important;
+            box-shadow: 0 12px 22px rgba(203, 107, 41, 0.26) !important;
+        }
+
+        [data-testid="baseButton-primary"]:hover {
+            box-shadow: 0 18px 28px rgba(203, 107, 41, 0.34) !important;
+            transform: translateY(-2px) !important;
+            background: linear-gradient(135deg, #da7b36 0%, #efad65 100%) !important;
+        }
+
+        [data-baseweb="input"] > div,
+        [data-baseweb="select"] > div,
+        textarea {
+            background: rgba(255, 255, 255, 0.045) !important;
+            border-color: rgba(255, 255, 255, 0.08) !important;
+            border-radius: 14px !important;
+            color: var(--text-main) !important;
+        }
+
+        [data-testid="stTabs"] [role="tablist"] {
+            gap: 0.65rem;
+            padding: 0;
+            margin-bottom: 1rem;
+        }
+
+        [data-testid="stTabs"] [role="tab"] {
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.04);
+            color: var(--text-muted);
+            padding: 0.6rem 1rem;
+        }
+
+        [data-testid="stTabs"] [aria-selected="true"] {
+            background: rgba(214, 122, 49, 0.18);
+            color: #fff0dd;
+            border-color: rgba(214, 122, 49, 0.34);
+        }
+
+        .stDataFrame {
+            border-radius: 18px;
+            overflow: hidden;
+            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.24);
+            border: 1px solid var(--border-soft);
+        }
+
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+            border: 1px solid var(--border-soft);
+            border-radius: 24px;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+        }
+
+        .streamlit-expanderHeader {
+            background: rgba(255, 255, 255, 0.03) !important;
+            border-radius: 14px;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        div[data-testid="stAlert"] {
+            border-radius: 18px;
+            border: 1px solid var(--border-soft);
+        }
+
+        @media (max-width: 1100px) {
+            .hero-shell {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 720px) {
+            .hero-copy {
+                padding: 1.35rem;
+            }
+
+            .hero-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .summary-card strong {
+                font-size: 1.6rem;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def main() -> None:
     _load_dotenv()
     _load_streamlit_secrets()
@@ -1034,16 +1404,14 @@ def main() -> None:
     stored_capital = float(bankroll_state.get("capital", DEFAULT_CAPITAL))
 
     st.set_page_config(page_title="TennisBet", layout="wide")
-    st.title("TennisBet")
-    st.caption(
-        "Statistical pre-match betting assistant. Past performance does not guarantee future results. Gamble responsibly."
-    )
+    inject_css()
 
     state = _load_last_update()
     odds_status = _odds_snapshot_status()
 
     with st.sidebar:
-        st.header("Controls")
+        st.header("Control Deck")
+        st.caption("Tune bankroll, filters, and refresh cycles from one place.")
         capital = st.number_input("Current capital (EUR)", min_value=0.0, value=float(stored_capital), step=0.5)
         tour_filter = st.selectbox("Tour", ["both", "atp", "wta"], index=0)
         min_edge_threshold = st.number_input(
@@ -1067,32 +1435,32 @@ def main() -> None:
             progress = st.empty()
             # Step 1: Data refresh
             try:
-                progress.info("① Updating data (TML ingest → Flashscore → Sackmann → WTA backfill → pipeline → ELO)...")
+                progress.info("1. Updating data: TML ingest -> Flashscore -> Sackmann -> WTA backfill -> pipeline -> ELO.")
                 refresh_report = _run_data_refresh()
                 data_warnings = refresh_report.get("warnings", [])
                 if data_warnings:
                     st.warning(f"Data: {len(data_warnings)} warning(s): " + "; ".join(data_warnings))
                 else:
-                    st.success("✓ Data refresh completed.")
+                    st.success("Data refresh completed.")
                 state = _load_last_update()
             except Exception as exc:
                 st.error(f"Data refresh failed: {exc}")
 
             # Step 2: Odds refresh
             try:
-                progress.info("② Refreshing odds...")
+                progress.info("2. Refreshing odds snapshot.")
                 odds_report = refresh_odds()
-                st.success("✓ Odds refresh completed.")
+                st.success("Odds refresh completed.")
                 odds_status = _odds_snapshot_status()
             except Exception as exc:
                 st.error(f"Odds refresh failed: {exc}")
 
             # Step 3: Predictions
             try:
-                progress.info("③ Generating predictions...")
+                progress.info("3. Generating predictions.")
                 outputs = _refresh_predictions(tour_filter=tour_filter)
                 if outputs:
-                    st.success("✓ Predictions refreshed.")
+                    st.success("Predictions refreshed.")
                     st.write("\n".join(outputs))
                 else:
                     st.warning("No upcoming odds to predict.")
@@ -1254,6 +1622,12 @@ def main() -> None:
                     f"log-loss {_format_decimal(row.get('ensemble_log_loss'), 3)}"
                 )
 
+    _render_dashboard_overview(
+        state=state,
+        odds_status=odds_status,
+        capital=float(capital),
+        tour_filter=tour_filter,
+    )
     _show_staleness_banner(state)
     if odds_status.get("status") == "ok" and float(odds_status.get("age_hours", 0.0)) > 4.0:
         st.warning(
@@ -1261,15 +1635,14 @@ def main() -> None:
             "Refresh odds before placing bets if the market may have moved."
         )
 
-    tab1, tab2, tab3 = st.tabs(["Today's Recommendations", "Model Performance", "Data Status"])
+    tab1, tab2, tab3 = st.tabs(["Recommendations", "Model Lab", "Data Status"])
 
     with tab1:
-        st.subheader("Today's Recommendations")
-        st.caption(
-            f"{datetime.now(UTC).strftime('%Y-%m-%d')} | "
-            f"{_count_predicted_matches(tour_filter)} predicted match(es) currently available"
+        _render_section_heading(
+            "Today's Recommendations",
+            f"{datetime.now(UTC).strftime('%Y-%m-%d')} | {_count_predicted_matches(tour_filter)} predicted match(es) available",
         )
-        st.write(
+        st.caption(
             f"Tour filter: {tour_filter} | Capital: {_format_currency(capital)} | "
             f"Threshold: {_format_pct(min_edge_threshold, digits=1)} | Max bets: {max_daily_bets}"
         )
@@ -1287,7 +1660,7 @@ def main() -> None:
                 st.info("No new recommendations to log.")
 
     with tab2:
-        st.subheader("Model Performance")
+        _render_section_heading("Model Lab", "Calibration, feature strength, backtests, and the recent execution trail.")
         metrics = _load_model_metrics()
         tours = _tour_list(tour_filter)
 
@@ -1375,7 +1748,7 @@ def main() -> None:
             st.dataframe(filtered_log.tail(30)[display_cols], width="stretch")
 
     with tab3:
-        st.subheader("Data Status")
+        _render_section_heading("Data Status", "Reference files, freshness, custom entries, and the latest prediction snapshot.")
         bankroll_state = _load_bankroll_state()
         pred_log = _load_prediction_log()
         open_bets = int(pred_log["status"].astype("string").fillna("").str.lower().eq("open").sum()) if not pred_log.empty else 0

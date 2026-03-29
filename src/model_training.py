@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import pickle
 import re
 import shutil
@@ -1069,7 +1070,7 @@ def _create_optuna_study(saved_params: dict[str, Any]) -> Any:
     study = optuna.create_study(
         direction="minimize",
         sampler=optuna.samplers.TPESampler(seed=42),
-        pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5),
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=1),
     )
     if saved_params:
         study.enqueue_trial(saved_params)
@@ -1105,8 +1106,8 @@ def _fit_optuna_catboost(
             "loss_function": "Logloss",
             "eval_metric": "Logloss",
             "verbose": False,
-            # CatBoost sklearn wrapper exposes thread_count, not n_jobs.
-            "thread_count": 1,
+            # Use half the CPU cores during tuning so folds don't contend.
+            "thread_count": max(1, (os.cpu_count() or 4) // 2),
         }
 
         fold_losses: list[float] = []

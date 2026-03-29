@@ -1,2 +1,2 @@
 match_date,match_key,tour,p1_name,p2_name,ensemble_prob_p1,ensemble_prob_p1_lower,ensemble_prob_p1_upper,ensemble_prob_p1_width,catboost_prob,xgboost_prob,lgbm_prob,rf_prob,elasticnet_prob,logreg_prob,confidence_tier,model_agreement
-2026-03-27,upcoming-atp-MZVfHUCt,atp,Jiri Lehecka,Arthur Fils,0.3990183283182393,0.0,1.0,1.0,0.4287108278626351,0.37374553,0.39459862624834807,,,,MEDIUM,0.9450347029810997
+2026-03-29,upcoming-atp-nFzGIgYQ,atp,Jiri Lehecka,Jannik Sinner,0.07066303223792628,0.0,0.7808399245675395,0.7808399245675395,0.07542415917761952,0.065901905,,,,,HIGH,0.9904777461206136
